@@ -1,0 +1,19 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, sans-serif;
+  background-color: white;
+}
+
+#LEADERS {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
