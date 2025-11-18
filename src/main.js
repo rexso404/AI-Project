@@ -1,142 +1,160 @@
 import './style.css'
+import {
+  AmbientLight,
+  Color,
+  DirectionalLight,
+  EdgesGeometry,
+  Group,
+  LineBasicMaterial,
+  LineSegments,
+  Mesh,
+  MeshStandardMaterial,
+  PerspectiveCamera,
+  Scene,
+  WebGLRenderer,
+  CylinderGeometry,
+} from 'three'
 
-let glContext = null;
-let shaderProgram = null;
-let aspectRatioLocation = null;
-let resizeHandler = null;
-let activeMode = null;
+let renderer = null
+let scene = null
+let camera = null
+let boardGroup = null
+let animationFrameId = null
+let resizeHandler = null
+let activeMode = null
 
-function initWebGL() {
-  const canvas = document.getElementById('LEADERS');
-  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-
-  if (!gl) {
-    alert('WebGL tidak didukung oleh browser Anda!');
-    return null;
+function initThreeScene() {
+  if (renderer) {
+    return
   }
 
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  const canvas = document.getElementById('LEADERS')
+  if (!canvas) {
+    console.error('LEADERS canvas not found in the document.')
+    return
+  }
 
-  gl.viewport(0, 0, canvas.width, canvas.height);
+  try {
+    renderer = new WebGLRenderer({
+      canvas,
+      antialias: true,
+    })
+  } catch (error) {
+    console.error('Failed to initialize WebGLRenderer:', error)
+    alert('WebGL tidak didukung oleh browser Anda!')
+    return
+  }
 
-  gl.clearColor(1.0, 1.0, 1.0, 1.0);
-  gl.clear(gl.COLOR_BUFFER_BIT);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  renderer.setSize(window.innerWidth, window.innerHeight)
+  renderer.shadowMap.enabled = true
 
-  return gl;
+  scene = new Scene()
+  scene.background = new Color(0x050714)
+
+  camera = new PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100)
+  camera.position.set(0, 3.8, 3.8)
+  camera.lookAt(0, 0, 0)
+
+  const ambientLight = new AmbientLight(0xffffff, 0.55)
+  scene.add(ambientLight)
+
+  const keyLight = new DirectionalLight(0xf6c343, 0.85)
+  keyLight.position.set(2, 5, 3)
+  scene.add(keyLight)
+
+  const rimLight = new DirectionalLight(0x6ea8ff, 0.35)
+  rimLight.position.set(-3, 2, -2)
+  scene.add(rimLight)
+
+  boardGroup = createBoardGroup()
+  scene.add(boardGroup)
+
+  resizeHandler = () => handleResize()
+  window.addEventListener('resize', resizeHandler)
+
+  startAnimationLoop()
 }
 
-const vertexShaderSource = `
-  attribute vec2 a_position;
-  uniform float u_aspectRatio;
-  varying vec2 v_position;
-  void main() {
-    v_position = a_position;
-    vec2 position = a_position;
-    position.x /= u_aspectRatio;
-    gl_Position = vec4(position, 0.0, 1.0);
-  }
-`;
+function createBoardGroup() {
+  const group = new Group()
 
-const fragmentShaderSource = `
-  precision mediump float;
-  void main() {
-    gl_FragColor = vec4(0.95, 0.82, 0.0, 1.0);
-  }
-`;
+  const baseGeometry = new CylinderGeometry(1.8, 1.8, 0.25, 6)
+  const baseMaterial = new MeshStandardMaterial({
+    color: 0xf6c343,
+    roughness: 0.35,
+    metalness: 0.25,
+  })
+  const baseMesh = new Mesh(baseGeometry, baseMaterial)
+  baseMesh.castShadow = true
+  baseMesh.receiveShadow = true
+  group.add(baseMesh)
 
-function createShader(gl, type, source) {
-  const shader = gl.createShader(type);
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
+  const rimGeometry = new CylinderGeometry(1.95, 1.95, 0.04, 6)
+  const rimMaterial = new MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.15,
+    metalness: 0.1,
+  })
+  const rimMesh = new Mesh(rimGeometry, rimMaterial)
+  rimMesh.position.y = 0.13
+  group.add(rimMesh)
 
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    console.error('Error compiling shader:', gl.getShaderInfoLog(shader));
-    gl.deleteShader(shader);
-    return null;
-  }
+  const emblemGeometry = new CylinderGeometry(0.35, 0.35, 0.06, 32)
+  const emblemMaterial = new MeshStandardMaterial({
+    color: 0x1b1f3b,
+    roughness: 0.2,
+    metalness: 0.05,
+  })
+  const emblem = new Mesh(emblemGeometry, emblemMaterial)
+  emblem.position.y = 0.18
+  group.add(emblem)
 
-  return shader;
+  const outlineGeometry = new EdgesGeometry(baseGeometry)
+  const outlineMaterial = new LineBasicMaterial({ color: 0x0c0f21 })
+  const outline = new LineSegments(outlineGeometry, outlineMaterial)
+  group.add(outline)
+
+  group.rotation.x = -Math.PI / 6
+
+  return group
 }
 
-function createProgram(gl, vertexShader, fragmentShader) {
-  const program = gl.createProgram();
-  gl.attachShader(program, vertexShader);
-  gl.attachShader(program, fragmentShader);
-  gl.linkProgram(program);
+function startAnimationLoop() {
+  const animate = () => {
+    animationFrameId = requestAnimationFrame(animate)
 
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    console.error('Error linking program:', gl.getProgramInfoLog(program));
-    gl.deleteProgram(program);
-    return null;
+    if (boardGroup) {
+      boardGroup.rotation.y += 0.003
+      boardGroup.rotation.z += 0.001
+    }
+
+    if (renderer && scene && camera) {
+      renderer.render(scene, camera)
+    }
   }
 
-  return program;
+  animate()
 }
 
-function drawHexagon(gl, program) {
-  const radius = 0.6;
-  const vertices = [];
-  
-  const centerX = 0.0;
-  const centerY = 0.0;
-  
-  for (let i = 0; i < 6; i++) {
-    const angle = (Math.PI / 3) * i + (Math.PI / 2);
-    const x = centerX + radius * Math.cos(angle);
-    const y = centerY + radius * Math.sin(angle);
-    vertices.push(x, y);
+function handleResize() {
+  if (!renderer || !camera) return
+
+  const width = window.innerWidth
+  const height = window.innerHeight
+
+  renderer.setSize(width, height)
+  camera.aspect = width / height
+  camera.updateProjectionMatrix()
+}
+
+function ensureBoardIsReady() {
+  if (!renderer) {
+    initThreeScene()
+    return
   }
 
-  const verticesArray = new Float32Array(vertices);
-
-  const buffer = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  gl.bufferData(gl.ARRAY_BUFFER, verticesArray, gl.STATIC_DRAW);
-
-  const positionLocation = gl.getAttribLocation(program, 'a_position');
-  gl.enableVertexAttribArray(positionLocation);
-  gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
-
-  gl.drawArrays(gl.TRIANGLE_FAN, 0, 6);
-}
-
-function refreshBoard() {
-  if (!glContext || !shaderProgram || !aspectRatioLocation) return;
-
-  const canvas = document.getElementById('LEADERS');
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-
-  glContext.viewport(0, 0, canvas.width, canvas.height);
-  const aspectRatio = canvas.width / canvas.height;
-  glContext.uniform1f(aspectRatioLocation, aspectRatio);
-  glContext.clear(glContext.COLOR_BUFFER_BIT);
-  drawHexagon(glContext, shaderProgram);
-}
-
-function prepareBoard() {
-  if (glContext) {
-    refreshBoard();
-    return;
-  }
-
-  glContext = initWebGL();
-  if (!glContext) return;
-
-  const vertexShader = createShader(glContext, glContext.VERTEX_SHADER, vertexShaderSource);
-  const fragmentShader = createShader(glContext, glContext.FRAGMENT_SHADER, fragmentShaderSource);
-
-  shaderProgram = createProgram(glContext, vertexShader, fragmentShader);
-  if (!shaderProgram) return;
-
-  glContext.useProgram(shaderProgram);
-  aspectRatioLocation = glContext.getUniformLocation(shaderProgram, 'u_aspectRatio');
-
-  refreshBoard();
-
-  resizeHandler = () => refreshBoard();
-  window.addEventListener('resize', resizeHandler);
+  handleResize()
 }
 
 function toggleMenu(isVisible) {
@@ -155,7 +173,7 @@ function toggleMenu(isVisible) {
 function startGame(mode) {
   activeMode = mode;
   toggleMenu(false);
-  prepareBoard();
+  ensureBoardIsReady();
 
   const humanReadable = mode === 'ai' ? 'Versus AI' : 'Versus Player (Local)';
   console.info(`Leaders started in ${humanReadable} mode.`);
