@@ -1,5 +1,11 @@
 import './style.css'
 
+let glContext = null;
+let shaderProgram = null;
+let aspectRatioLocation = null;
+let resizeHandler = null;
+let activeMode = null;
+
 function initWebGL() {
   const canvas = document.getElementById('LEADERS');
   const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
@@ -95,34 +101,81 @@ function drawHexagon(gl, program) {
   gl.drawArrays(gl.TRIANGLE_FAN, 0, 6);
 }
 
-function main() {
-  const gl = initWebGL();
-  if (!gl) return;
+function refreshBoard() {
+  if (!glContext || !shaderProgram || !aspectRatioLocation) return;
 
-  const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
-  const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+  const canvas = document.getElementById('LEADERS');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
 
-  const program = createProgram(gl, vertexShader, fragmentShader);
-  gl.useProgram(program);
+  glContext.viewport(0, 0, canvas.width, canvas.height);
+  const aspectRatio = canvas.width / canvas.height;
+  glContext.uniform1f(aspectRatioLocation, aspectRatio);
+  glContext.clear(glContext.COLOR_BUFFER_BIT);
+  drawHexagon(glContext, shaderProgram);
+}
 
-  const aspectRatioLocation = gl.getUniformLocation(program, 'u_aspectRatio');
-  const aspectRatio = gl.canvas.width / gl.canvas.height;
-  gl.uniform1f(aspectRatioLocation, aspectRatio);
+function prepareBoard() {
+  if (glContext) {
+    refreshBoard();
+    return;
+  }
 
-  drawHexagon(gl, program);
+  glContext = initWebGL();
+  if (!glContext) return;
 
-  window.addEventListener('resize', () => {
-    const canvas = document.getElementById('LEADERS');
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    
-    const aspectRatio = canvas.width / canvas.height;
-    gl.uniform1f(aspectRatioLocation, aspectRatio);
+  const vertexShader = createShader(glContext, glContext.VERTEX_SHADER, vertexShaderSource);
+  const fragmentShader = createShader(glContext, glContext.FRAGMENT_SHADER, fragmentShaderSource);
 
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    drawHexagon(gl, program);
+  shaderProgram = createProgram(glContext, vertexShader, fragmentShader);
+  if (!shaderProgram) return;
+
+  glContext.useProgram(shaderProgram);
+  aspectRatioLocation = glContext.getUniformLocation(shaderProgram, 'u_aspectRatio');
+
+  refreshBoard();
+
+  resizeHandler = () => refreshBoard();
+  window.addEventListener('resize', resizeHandler);
+}
+
+function toggleMenu(isVisible) {
+  const menu = document.getElementById('main-menu');
+  const canvas = document.getElementById('LEADERS');
+
+  if (isVisible) {
+    menu.classList.remove('is-hidden');
+    canvas.classList.add('canvas-hidden');
+  } else {
+    menu.classList.add('is-hidden');
+    canvas.classList.remove('canvas-hidden');
+  }
+}
+
+function startGame(mode) {
+  activeMode = mode;
+  toggleMenu(false);
+  prepareBoard();
+
+  const humanReadable = mode === 'ai' ? 'Versus AI' : 'Versus Player (Local)';
+  console.info(`Leaders started in ${humanReadable} mode.`);
+}
+
+function wireMenuButtons() {
+  const menu = document.getElementById('main-menu');
+  if (!menu) return;
+
+  menu.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-mode]');
+    if (!button) return;
+    const { mode } = button.dataset;
+    if (!mode) return;
+    startGame(mode);
   });
 }
 
-main();
+function init() {
+  wireMenuButtons();
+}
+
+document.addEventListener('DOMContentLoaded', init);

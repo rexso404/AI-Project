@@ -3,10 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WebGL Game</title>
+    <title>Leaders</title>
   </head>
   <body>
-    <canvas id="LEADERS"></canvas>
+    <canvas id="LEADERS" aria-label="Leaders game board" class="canvas-hidden"></canvas>
+
+    <section id="main-menu" class="menu" aria-labelledby="menu-title">
+      <div class="menu-panel">
+        <p class="menu-kicker">Board Game Prototype</p>
+        <h1 id="menu-title">Leaders</h1>
+        <p class="menu-copy">Choose how you want to play to start setting up the battlefield.</p>
+
+        <div class="menu-actions">
+          <button type="button" class="menu-button" data-mode="ai">Versus AI</button>
+          <button type="button" class="menu-button secondary" data-mode="local">Versus Player (Local)</button>
+        </div>
+      </div>
+    </section>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
