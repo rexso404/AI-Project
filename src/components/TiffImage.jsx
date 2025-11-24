@@ -70,7 +70,7 @@ const TiffImage = ({ src, alt, className, onError }) => {
             if (containerRef.current) {
                 containerRef.current.innerHTML = '';
                 // Apply classes to the generated canvas
-                canvas.className = 'w-full h-full object-cover';
+                canvas.className = 'w-full h-full';
                 // Append the new canvas
                 containerRef.current.appendChild(canvas);
             }
