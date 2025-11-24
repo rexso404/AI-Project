@@ -39,6 +39,7 @@ const CardSlot = ({ isDeck, isEmpty, image, className = "", onError, bgColor = "
 const Board = () => {
   const nodes = getBoardNodes();
   const [leaders, setLeaders] = useState(() => getRandomCharacters(3));
+  const [selectedNode, setSelectedNode] = useState(null);
 
   // Game Leaders Logic (P1 vs P2)
   const [gameLeaders] = useState(() => {
@@ -80,6 +81,26 @@ const Board = () => {
       });
   };
 
+        const handleNodeClick = (node, image) => {
+          if (!image) {
+            return;
+          }
+
+          setSelectedNode(prev => {
+            if (prev && prev.id === node.id) {
+              return null;
+            }
+            return { id: node.id, x: node.x, y: node.y, image };
+          });
+        };
+
+        const isWithinHighlight = (node) => {
+          if (!selectedNode) return false;
+          const dx = Math.abs(node.x - selectedNode.x);
+          const dy = Math.abs(node.y - selectedNode.y);
+          return dx <= 1 && dy <= 1;
+        };
+
   return (
     <div 
       className="w-full h-screen bg-cover bg-center flex items-center justify-between p-8 overflow-hidden relative"
@@ -111,28 +132,43 @@ const Board = () => {
             
             {/* Grid Overlay */}
             <div className="absolute inset-0">
-                {nodes.map(node => (
+                {nodes.map(node => {
+                  let nodeImage = null;
+                  if (node.id === 15) nodeImage = gameLeaders.p1.boardImage;
+                  if (node.id === 21) nodeImage = gameLeaders.p2.boardImage;
+
+                  const isCenter = selectedNode?.id === node.id;
+                  const withinHalo = selectedNode && !isCenter && isWithinHighlight(node);
+                  const shouldRenderHighlight = isCenter || withinHalo;
+                  const displayImage = shouldRenderHighlight ? selectedNode?.image : nodeImage;
+
+                  const opacityClass = withinHalo ? 'opacity-40 grayscale contrast-75' : 'opacity-100';
+                  const ringClass = isCenter ? 'ring-4 ring-yellow-300 ring-offset-2 ring-offset-black shadow-[0_0_20px_rgba(255,215,0,0.5)]' : '';
+                  const hoverClass = nodeImage ? 'hover:bg-white/10' : 'hover:bg-white/20';
+
+                  return (
                     <div 
-                        key={node.id}
-                        className="absolute rounded-full cursor-pointer pointer-events-auto hover:bg-white/20 transition-colors flex items-center justify-center overflow-hidden"
-                        style={{
-                            width: '9vh',
-                            height: '9vh',
-                            left: `calc(50% + ${(node.x - 3) * 10.5}vh)`, 
-                            top: `calc(50% + ${(node.y - 3) * 12.1}vh)`,
-                            transform: 'translate(-50%, -50%)'
-                        }}
+                      key={node.id}
+                      onClick={() => handleNodeClick(node, nodeImage)}
+                      className={`absolute rounded-full cursor-pointer pointer-events-auto transition-all flex items-center justify-center overflow-hidden ${hoverClass} ${ringClass}`}
+                      style={{
+                        width: '9vh',
+                        height: '9vh',
+                        left: `calc(50% + ${(node.x - 3) * 10.5}vh)`, 
+                        top: `calc(50% + ${(node.y - 3) * 12.1}vh)`,
+                        transform: 'translate(-50%, -50%)'
+                      }}
                     >
-                        {/* P1 Leader (Top - Node 15) */}
-                        {node.id === 15 && (
-                            <img src={gameLeaders.p1.boardImage} alt="P1 Leader" className="w-full h-full object-cover" />
-                        )}
-                        {/* P2 Leader (Bottom - Node 21) */}
-                        {node.id === 21 && (
-                            <img src={gameLeaders.p2.boardImage} alt="P2 Leader" className="w-full h-full object-cover" />
-                        )}
+                      {displayImage && (
+                        <img 
+                          src={displayImage} 
+                          alt="Leader" 
+                          className={`w-full h-full object-cover transition-opacity duration-200 ${opacityClass}`}
+                        />
+                      )}
                     </div>
-                ))}
+                  );
+                })}
             </div>
         </div>
       </div>
