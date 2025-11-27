@@ -3,7 +3,7 @@ import boardImg from '../assets/board/Leaders_Board.png';
 import bgImg from '../assets/background/bg.jpg';
 import blankCardImg from '../assets/Blank/blank.png';
 import { getBoardNodes } from '../Logic/Board';
-import { getRandomCharacters, getUniqueRandomCharacter } from '../Logic/CharacterRandomizer';
+import { getUniqueRandomCharacter } from '../Logic/CharacterRandomizer';
 import TiffImage from '../components/TiffImage.jsx';
 
 // Leader Assets
@@ -15,6 +15,132 @@ import blackRoi from '../assets/leader_noir/Leaders_BGA_black_LeaderRoi.png';
 // Hand Assets
 import reinePortrait from '../assets/Q&K_Potrait/LEADERS-Reine.tif?url';
 import roiPortrait from '../assets/Q&K_Potrait/LEADERS-Roi.tif?url';
+
+// Character assets (white)
+import whiteAcrobate from '../assets/character_blanc/Leaders_BGA_white_Acrobate.png';
+import whiteArchere from '../assets/character_blanc/Leaders_BGA_white_Archere.png';
+import whiteAssassin from '../assets/character_blanc/Leaders_BGA_white_Assassin.png';
+import whiteCavalier from '../assets/character_blanc/Leaders_BGA_white_Cavalier.png';
+import whiteCogneur from '../assets/character_blanc/Leaders_BGA_white_Cogneur.png';
+import whiteGardeRoyal from '../assets/character_blanc/Leaders_BGA_white_GardeRoyal.png';
+import whiteGeolier from '../assets/character_blanc/Leaders_BGA_white_Geolier.png';
+import whiteIllusionniste from '../assets/character_blanc/Leaders_BGA_white_Illusionniste.png';
+import whiteLanceGrappin from '../assets/character_blanc/Leaders_BGA_white_LanceGrappin.png';
+import whiteManipulatrice from '../assets/character_blanc/Leaders_BGA_white_Manipulatrice.png';
+import whiteNemesis from '../assets/character_blanc/Leaders_BGA_white_Nemesis.png';
+import whiteOurson from '../assets/character_blanc/Leaders_BGA_white_Ourson.png';
+import whiteProtecteur from '../assets/character_blanc/Leaders_BGA_white_Protecteur.png';
+import whiteRodeuse from '../assets/character_blanc/Leaders_BGA_white_Rodeuse.png';
+import whiteTavernier from '../assets/character_blanc/Leaders_BGA_white_Tavernier.png';
+import whiteVieilOurs from '../assets/character_blanc/Leaders_BGA_white_VieilOurs.png';
+import whiteVizir from '../assets/character_blanc/Leaders_BGA_white_Vizir.png';
+
+// Character assets (black)
+import blackAcrobate from '../assets/character_noir/Leaders_BGA_black_Acrobate.png';
+import blackArchere from '../assets/character_noir/Leaders_BGA_black_Archere.png';
+import blackAssassin from '../assets/character_noir/Leaders_BGA_black_Assassin.png';
+import blackCavalier from '../assets/character_noir/Leaders_BGA_black_Cavalier.png';
+import blackCogneur from '../assets/character_noir/Leaders_BGA_black_Cogneur.png';
+import blackGardeRoyal from '../assets/character_noir/Leaders_BGA_black_GardeRoyal.png';
+import blackGeolier from '../assets/character_noir/Leaders_BGA_black_Geolier.png';
+import blackIllusionniste from '../assets/character_noir/Leaders_BGA_black_Illusionniste.png';
+import blackLanceGrappin from '../assets/character_noir/Leaders_BGA_black_LanceGrappin.png';
+import blackManipulatrice from '../assets/character_noir/Leaders_BGA_black_Manipulatrice.png';
+import blackNemesis from '../assets/character_noir/Leaders_BGA_black_Nemesis.png';
+import blackOurson from '../assets/character_noir/Leaders_BGA_black_Ourson.png';
+import blackProtecteur from '../assets/character_noir/Leaders_BGA_black_Protecteur.png';
+import blackRodeuse from '../assets/character_noir/Leaders_BGA_black_Rodeuse.png';
+import blackTavernier from '../assets/character_noir/Leaders_BGA_black_Tavernier.png';
+import blackVieilOurs from '../assets/character_noir/Leaders_BGA_black_VieilOurs.png';
+import blackVizir from '../assets/character_noir/Leaders_BGA_black_Vizir.png';
+
+const normalizeKey = (value = '') => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const WHITE_CHARACTER_MAP = {
+  acrobate: whiteAcrobate,
+  archere: whiteArchere,
+  assassin: whiteAssassin,
+  cavalier: whiteCavalier,
+  cogneur: whiteCogneur,
+  garderoyal: whiteGardeRoyal,
+  geolier: whiteGeolier,
+  illusionniste: whiteIllusionniste,
+  lancegrappin: whiteLanceGrappin,
+  manipulatrice: whiteManipulatrice,
+  nemesis: whiteNemesis,
+  ourson: whiteOurson,
+  protecteur: whiteProtecteur,
+  rodeuse: whiteRodeuse,
+  tavernier: whiteTavernier,
+  vieilours: whiteVieilOurs,
+  vizir: whiteVizir,
+};
+
+const BLACK_CHARACTER_MAP = {
+  acrobate: blackAcrobate,
+  archere: blackArchere,
+  assassin: blackAssassin,
+  cavalier: blackCavalier,
+  cogneur: blackCogneur,
+  garderoyal: blackGardeRoyal,
+  geolier: blackGeolier,
+  illusionniste: blackIllusionniste,
+  lancegrappin: blackLanceGrappin,
+  manipulatrice: blackManipulatrice,
+  nemesis: blackNemesis,
+  ourson: blackOurson,
+  protecteur: blackProtecteur,
+  rodeuse: blackRodeuse,
+  tavernier: blackTavernier,
+  vieilours: blackVieilOurs,
+  vizir: blackVizir,
+};
+const BOARD_COMPATIBLE_KEYS = new Set([
+  ...Object.keys(WHITE_CHARACTER_MAP),
+  ...Object.keys(BLACK_CHARACTER_MAP),
+]);
+
+const extractPortraitKey = (imageUrl = '') => {
+  const fileName = imageUrl.split('/').pop()?.split('?')[0] ?? '';
+  let base = fileName.replace(/^LEADERS[-_]/i, '');
+  base = base.replace(/\.(tif|tiff|png)$/i, '');
+  base = base.replace(/[-_]?LQ$/i, '');
+  return normalizeKey(base);
+};
+
+const hasBoardAssetForCard = (imageUrl) => BOARD_COMPATIBLE_KEYS.has(extractPortraitKey(imageUrl));
+
+const getBoardAssetForPlayer = (imageUrl, playerKey) => {
+  const key = extractPortraitKey(imageUrl);
+  const map = playerKey === 'p1' ? WHITE_CHARACTER_MAP : BLACK_CHARACTER_MAP;
+  return map[key] ?? null;
+};
+
+const drawPlayableCharacter = (excludeList = []) => {
+  const banned = [];
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const candidate = getUniqueRandomCharacter([...excludeList.filter(Boolean), ...banned]);
+    if (!candidate) break;
+    if (hasBoardAssetForCard(candidate)) {
+      return candidate;
+    }
+    banned.push(candidate);
+  }
+  return null;
+};
+
+const generateInitialLeaders = () => {
+  const picks = [];
+  while (picks.length < 3) {
+    const next = drawPlayableCharacter(picks);
+    if (!next) break;
+    picks.push(next);
+  }
+  while (picks.length < 3) {
+    picks.push(null);
+  }
+  return picks;
+};
 
 const CardSlot = ({ isDeck, isEmpty, image, className = "", onError, bgColor = "bg-[#1a1a1a]", borderColor = "border-white" }) => {
   const isTiff = image && (image.toLowerCase().includes('.tif') || image.toLowerCase().includes('.tiff'));
@@ -45,7 +171,7 @@ const Board = () => {
     });
     return map;
   }, [nodes]);
-  const [leaders, setLeaders] = useState(() => getRandomCharacters(3));
+  const [leaders, setLeaders] = useState(() => generateInitialLeaders());
   const [selectedNode, setSelectedNode] = useState(null);
   const [currentTurn, setCurrentTurn] = useState('Player 1');
   // Positions of leaders on the board (node ids)
@@ -60,32 +186,24 @@ const Board = () => {
   const [placements, setPlacements] = useState([]);
   // Currently selected summon card to place (may be forced right after pick)
   const [selectedSummon, setSelectedSummon] = useState(null);
+  const [turnHasMoved, setTurnHasMoved] = useState(false);
 
   // Game Leaders Logic (P1 vs P2)
   const [gameLeaders] = useState(() => {
-      const isP1White = Math.random() > 0.5;
-      const isP1Reine = Math.random() > 0.5;
+      const isReineP1 = Math.random() > 0.5;
+      const isReineP2 = Math.random() > 0.5;
 
-      const getLeaderImage = (isWhite, isReine) => {
-          if (isWhite) return isReine ? whiteReine : whiteRoi;
-          return isReine ? blackReine : blackRoi;
-      };
-
-      const getHandImage = (isReine) => {
-          return isReine ? reinePortrait : roiPortrait;
-      };
+      const buildLeader = (color, isReine) => ({
+        boardImage: color === 'white'
+          ? (isReine ? whiteReine : whiteRoi)
+          : (isReine ? blackReine : blackRoi),
+        handImage: isReine ? reinePortrait : roiPortrait,
+        isWhite: color === 'white',
+      });
 
       return {
-          p1: {
-              boardImage: getLeaderImage(isP1White, isP1Reine),
-              handImage: getHandImage(isP1Reine),
-              isWhite: isP1White
-          },
-          p2: {
-              boardImage: getLeaderImage(!isP1White, !isP1Reine),
-              handImage: getHandImage(!isP1Reine),
-              isWhite: !isP1White
-          }
+        p1: buildLeader('white', isReineP1),
+        p2: buildLeader('black', isReineP2),
       };
   });
 
@@ -93,9 +211,11 @@ const Board = () => {
       console.warn(`Leader at index ${index} failed to load. Retrying with a new character...`);
       setLeaders(prevLeaders => {
           const newLeaders = [...prevLeaders];
-          const newChar = getUniqueRandomCharacter(newLeaders);
+        const newChar = drawPlayableCharacter(newLeaders.filter(Boolean));
           if (newChar) {
               newLeaders[index] = newChar;
+        } else {
+          newLeaders[index] = null;
           }
           return newLeaders;
       });
@@ -103,6 +223,7 @@ const Board = () => {
 
         const playerLabelToKey = (label) => (label === 'Player 1' ? 'p1' : 'p2');
         const playerKeyToLabel = (key) => (key === 'p1' ? 'Player 1' : 'Player 2');
+        const getPlayerPieceCount = (playerKey) => decks[playerKey].length + placements.filter(piece => piece.playerKey === playerKey).length;
 
         const toggleTurn = () => {
           setCurrentTurn(prev => prev === 'Player 1' ? 'Player 2' : 'Player 1');
@@ -110,6 +231,7 @@ const Board = () => {
           setSelectedNode(null);
           setCanPickFor(null);
           setSelectedSummon(null);
+          setTurnHasMoved(false);
         };
 
         const isNodeEmpty = (nodeId) => {
@@ -145,6 +267,10 @@ const Board = () => {
             return;
           }
 
+          if (turnHasMoved) {
+            return;
+          }
+
           // If clicking on a node that has a leader
           const clickedIsP1 = leadersPositions.p1 === nodeId;
           const clickedIsP2 = leadersPositions.p2 === nodeId;
@@ -177,8 +303,16 @@ const Board = () => {
               // clear selection and pass turn
               setSelectedLeader(null);
               setSelectedNode(null);
-              // Enter pick phase for the player who moved. They may pick one of the 3 cards on the left.
-              setCanPickFor(selectedLeader.player);
+              setTurnHasMoved(true);
+              const playerLabel = selectedLeader.player;
+              const playerKey = playerLabelToKey(playerLabel);
+              const piecesCount = getPlayerPieceCount(playerKey);
+              const hasDraftOptions = leaders.some(Boolean);
+              if (piecesCount >= 4 || !hasDraftOptions) {
+                toggleTurn();
+              } else {
+                setCanPickFor(playerLabel);
+              }
             }
           }
         };
@@ -188,20 +322,33 @@ const Board = () => {
           if (currentTurn !== canPickFor) return;
 
           const card = leaders[index];
-          if (!card) return;
+          if (!card) return; // no card to pick
 
           const playerKey = playerLabelToKey(canPickFor);
+          const totalPieces = getPlayerPieceCount(playerKey);
+          if (totalPieces >= 4) {
+            console.warn(`Maximum characters reached for ${canPickFor}`);
+            setCanPickFor(null);
+            toggleTurn();
+            return;
+          }
+
+          const boardImage = getBoardAssetForPlayer(card, playerKey) ?? card;
           const deckIndex = decks[playerKey].length;
+          const cardData = { portrait: card, boardImage };
 
           setDecks(prev => {
             const next = { ...prev };
-            next[playerKey] = [...next[playerKey], card];
+            next[playerKey] = [...next[playerKey], cardData];
             return next;
           });
 
           setLeaders(prev => {
             const next = [...prev];
             next[index] = null;
+            const exclude = next.filter(Boolean);
+            const replacement = drawPlayableCharacter(exclude);
+            next[index] = replacement;
             return next;
           });
 
@@ -209,7 +356,7 @@ const Board = () => {
             player: canPickFor,
             playerKey,
             cardIndex: deckIndex,
-            image: card,
+            image: boardImage,
             forced: true,
           });
 
@@ -248,7 +395,7 @@ const Board = () => {
             player: playerLabel,
             playerKey,
             cardIndex,
-            image: card,
+            image: card.boardImage,
             forced: false,
           });
         };
@@ -383,7 +530,7 @@ const Board = () => {
                         onClick={() => handleDeckCardClick('p1', idx)}
                         className={`${currentTurn === 'Player 1' && !selectedSummon?.forced ? 'cursor-pointer' : 'cursor-not-allowed'} ${border}`}
                       >
-                        <CardSlot image={card} isEmpty={!card} />
+                        <CardSlot image={card?.portrait} isEmpty={!card} />
                       </div>
                     );
                   })
@@ -407,7 +554,7 @@ const Board = () => {
                         onClick={() => handleDeckCardClick('p2', idx)}
                         className={`${currentTurn === 'Player 2' && !selectedSummon?.forced ? 'cursor-pointer' : 'cursor-not-allowed'} ${border}`}
                       >
-                        <CardSlot image={card} isEmpty={!card} />
+                        <CardSlot image={card?.portrait} isEmpty={!card} />
                       </div>
                     );
                   })
