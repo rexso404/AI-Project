@@ -40,6 +40,7 @@ const Board = () => {
   const nodes = getBoardNodes();
   const [leaders, setLeaders] = useState(() => getRandomCharacters(3));
   const [selectedNode, setSelectedNode] = useState(null);
+  const [currentTurn, setCurrentTurn] = useState('Player 1');
 
   // Game Leaders Logic (P1 vs P2)
   const [gameLeaders] = useState(() => {
@@ -103,9 +104,23 @@ const Board = () => {
 
   return (
     <div 
-      className="w-full h-screen bg-cover bg-center flex items-center justify-between p-8 overflow-hidden relative"
+      className="w-full h-screen bg-cover bg-center flex flex-col overflow-hidden relative"
       style={{ backgroundImage: `url(${bgImg})` }}
     >
+      {/* Navbar */}
+      <div className="w-full h-16 bg-white flex items-center justify-between px-8 shadow-md z-50">
+        <div className="text-2xl font-bold text-gray-800">
+          Current Turn: <span className={currentTurn === 'Player 1' ? 'text-red-500' : 'text-cyan-500'}>{currentTurn}</span>
+        </div>
+        <button 
+          onClick={() => setCurrentTurn(prev => prev === 'Player 1' ? 'Player 2' : 'Player 1')}
+          className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded shadow transition-colors"
+        >
+          STOP TURN
+        </button>
+      </div>
+
+      <div className="flex-1 flex items-center justify-between p-8 relative w-full">
       {/* Left Side - Deck & Slots */}
       <div className="flex items-center gap-4 z-10">
         {/* Deck Column */}
@@ -202,6 +217,7 @@ const Board = () => {
                 ))}
             </div>
         </div>
+      </div>
       </div>
     </div>
   );
