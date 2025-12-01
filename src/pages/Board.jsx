@@ -118,22 +118,27 @@ const buildEmptyDecks = () => ({
 });
 
 const createGameLeaders = () => {
-  const isReineP1 = Math.random() > 0.5;
-  const isReineP2 = !isReineP1;
-
   const buildLeader = (color, isReine) => ({
     boardImage: color === 'white'
       ? (isReine ? whiteReine : whiteRoi)
       : (isReine ? blackReine : blackRoi),
     handImage: isReine ? reinePortrait : roiPortrait,
     isWhite: color === 'white',
+    role: isReine ? 'reine' : 'roi',
   });
 
-  return {
+  const isReineP1 = Math.random() > 0.5;
+  const leaders = {
     p1: buildLeader('white', isReineP1),
-    p2: buildLeader('black', isReineP2),
+    p2: buildLeader('black', !isReineP1),
   };
+  const firstPlayerKey = leaders.p1.role === 'roi' ? 'p1' : 'p2';
+
+  return { leaders, firstPlayerKey };
 };
+
+const playerLabelToKey = (label) => (label === 'Player 1' ? 'p1' : 'p2');
+const playerKeyToLabel = (key) => (key === 'p1' ? 'Player 1' : 'Player 2');
 
 const createInitialLeaderPositions = () => ({ p1: 15, p2: 21 });
 
@@ -217,9 +222,19 @@ const Board = () => {
     return map;
   }, [nodes]);
   const savedGame = useMemo(() => getSavedGameState(), []);
+  const initialGameLeaderData = useMemo(() => {
+    if (savedGame?.gameLeaders) {
+      const roiEntry = Object.entries(savedGame.gameLeaders).find(([, leader]) => leader?.role === 'roi');
+      return {
+        leaders: savedGame.gameLeaders,
+        firstPlayerKey: roiEntry ? roiEntry[0] : 'p1',
+      };
+    }
+    return createGameLeaders();
+  }, [savedGame]);
   const [leaders, setLeaders] = useState(() => savedGame?.leaders ?? generateInitialLeaders());
   const [selectedNode, setSelectedNode] = useState(null);
-  const [currentTurn, setCurrentTurn] = useState(() => savedGame?.currentTurn ?? 'Player 1');
+  const [currentTurn, setCurrentTurn] = useState(() => savedGame?.currentTurn ?? playerKeyToLabel(initialGameLeaderData.firstPlayerKey));
   // Positions of leaders on the board (node ids)
   const [leadersPositions, setLeadersPositions] = useState(() => savedGame?.leadersPositions ?? createInitialLeaderPositions());
   // Selected leader info when a player selects their leader to move
@@ -264,7 +279,7 @@ const Board = () => {
   const playerDeckShiftClass = bothDecksFull ? '-translate-x-12' : '';
 
   // Game Leaders Logic (P1 vs P2)
-  const [gameLeaders, setGameLeaders] = useState(() => savedGame?.gameLeaders ?? createGameLeaders());
+  const [gameLeaders, setGameLeaders] = useState(() => initialGameLeaderData.leaders);
 
   const handleLeaderError = (index) => {
     console.warn(`Leader at index ${index} failed to load. Retrying with a new character...`);
@@ -304,8 +319,9 @@ const Board = () => {
 
   const resetGameState = () => {
     clearSavedGame();
+    const { leaders: freshGameLeaders, firstPlayerKey } = createGameLeaders();
     setLeaders(generateInitialLeaders());
-    setCurrentTurn('Player 1');
+    setCurrentTurn(playerKeyToLabel(firstPlayerKey));
     setLeadersPositions(createInitialLeaderPositions());
     setSelectedLeader(null);
     setSelectedNode(null);
@@ -316,11 +332,9 @@ const Board = () => {
     setSelectedSummon(null);
     resetMovementTracker();
     setSelectedUnit(null);
-    setGameLeaders(createGameLeaders());
+    setGameLeaders(freshGameLeaders);
   };
 
-        const playerLabelToKey = (label) => (label === 'Player 1' ? 'p1' : 'p2');
-        const playerKeyToLabel = (key) => (key === 'p1' ? 'Player 1' : 'Player 2');
         const getPlayerPieceCount = (playerKey) => placements.filter(piece => piece.playerKey === playerKey).length;
 
         const handlePostMove = (playerLabel) => {
