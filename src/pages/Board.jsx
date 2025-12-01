@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import boardImg from '../assets/board/Leaders_Board.png';
 import bgImg from '../assets/background/bg.jpg';
 import blankCardImg from '../assets/Blank/blank.png';
@@ -110,6 +110,43 @@ const extractPortraitKey = (imageUrl = '') => {
 
 const MAX_DECK_SIZE = 4;
 const DECK_INDEXES = Array.from({ length: MAX_DECK_SIZE }, (_, idx) => idx);
+const STORAGE_KEY = 'leaders-game-state';
+
+const buildEmptyDecks = () => ({
+  p1: Array(MAX_DECK_SIZE).fill(null),
+  p2: Array(MAX_DECK_SIZE).fill(null),
+});
+
+const createGameLeaders = () => {
+  const isReineP1 = Math.random() > 0.5;
+  const isReineP2 = !isReineP1;
+
+  const buildLeader = (color, isReine) => ({
+    boardImage: color === 'white'
+      ? (isReine ? whiteReine : whiteRoi)
+      : (isReine ? blackReine : blackRoi),
+    handImage: isReine ? reinePortrait : roiPortrait,
+    isWhite: color === 'white',
+  });
+
+  return {
+    p1: buildLeader('white', isReineP1),
+    p2: buildLeader('black', isReineP2),
+  };
+};
+
+const createInitialLeaderPositions = () => ({ p1: 15, p2: 21 });
+
+const getSavedGameState = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    console.warn('Failed to parse saved game state', error);
+    return null;
+  }
+};
 
 const hasBoardAssetForCard = (imageUrl) => BOARD_COMPATIBLE_KEYS.has(extractPortraitKey(imageUrl));
 
@@ -179,23 +216,24 @@ const Board = () => {
     });
     return map;
   }, [nodes]);
-  const [leaders, setLeaders] = useState(() => generateInitialLeaders());
+  const savedGame = useMemo(() => getSavedGameState(), []);
+  const [leaders, setLeaders] = useState(() => savedGame?.leaders ?? generateInitialLeaders());
   const [selectedNode, setSelectedNode] = useState(null);
-  const [currentTurn, setCurrentTurn] = useState('Player 1');
+  const [currentTurn, setCurrentTurn] = useState(() => savedGame?.currentTurn ?? 'Player 1');
   // Positions of leaders on the board (node ids)
-  const [leadersPositions, setLeadersPositions] = useState({ p1: 15, p2: 21 });
+  const [leadersPositions, setLeadersPositions] = useState(() => savedGame?.leadersPositions ?? createInitialLeaderPositions());
   // Selected leader info when a player selects their leader to move
   const [selectedLeader, setSelectedLeader] = useState(null);
   // After moving, the player may pick one of the 3 left-side characters
-  const [canPickFor, setCanPickFor] = useState(null); // 'Player 1' | 'Player 2' | null
+  const [canPickFor, setCanPickFor] = useState(() => savedGame?.canPickFor ?? null); // 'Player 1' | 'Player 2' | null
   // Deck/hand of picked characters waiting to be placed on the board
-  const [decks, setDecks] = useState({ p1: Array(MAX_DECK_SIZE).fill(null), p2: Array(MAX_DECK_SIZE).fill(null) });
+  const [decks, setDecks] = useState(() => savedGame?.decks ?? buildEmptyDecks());
   // Cards already placed on the board (besides leaders)
-  const [placements, setPlacements] = useState([]);
-  const [retiredCards, setRetiredCards] = useState([]);
+  const [placements, setPlacements] = useState(() => savedGame?.placements ?? []);
+  const [retiredCards, setRetiredCards] = useState(() => savedGame?.retiredCards ?? []);
   // Currently selected summon card to place (may be forced right after pick)
-  const [selectedSummon, setSelectedSummon] = useState(null);
-  const [movementTracker, setMovementTracker] = useState(() => createMovementTracker());
+  const [selectedSummon, setSelectedSummon] = useState(() => savedGame?.selectedSummon ?? null);
+  const [movementTracker, setMovementTracker] = useState(() => savedGame?.movementTracker ?? createMovementTracker());
   const [selectedUnit, setSelectedUnit] = useState(null);
 
   const hasLeaderMoved = (playerKey) => Boolean(movementTracker[playerKey]?.leader);
@@ -222,39 +260,63 @@ const Board = () => {
   const resetMovementTracker = () => setMovementTracker(createMovementTracker());
   const isPlayerDeckFull = (playerKey) => decks[playerKey].every(Boolean);
   const bothDecksFull = isPlayerDeckFull('p1') && isPlayerDeckFull('p2');
+  const boardShiftClass = bothDecksFull ? '-translate-x-24' : '-translate-x-48';
+  const playerDeckShiftClass = bothDecksFull ? '-translate-x-12' : '';
 
   // Game Leaders Logic (P1 vs P2)
-    const [gameLeaders] = useState(() => {
-      const isReineP1 = Math.random() > 0.5;
-      // Ensure the two leaders are different (one Reine, one Roi)
-      const isReineP2 = !isReineP1;
-
-      const buildLeader = (color, isReine) => ({
-        boardImage: color === 'white'
-          ? (isReine ? whiteReine : whiteRoi)
-          : (isReine ? blackReine : blackRoi),
-        handImage: isReine ? reinePortrait : roiPortrait,
-        isWhite: color === 'white',
-      });
-
-      return {
-        p1: buildLeader('white', isReineP1),
-        p2: buildLeader('black', isReineP2),
-      };
-  });
+  const [gameLeaders, setGameLeaders] = useState(() => savedGame?.gameLeaders ?? createGameLeaders());
 
   const handleLeaderError = (index) => {
-      console.warn(`Leader at index ${index} failed to load. Retrying with a new character...`);
-      setLeaders(prevLeaders => {
-          const newLeaders = [...prevLeaders];
-        const newChar = drawPlayableCharacter([...newLeaders.filter(Boolean), ...retiredCards]);
-          if (newChar) {
-              newLeaders[index] = newChar;
-        } else {
-          newLeaders[index] = null;
-          }
-          return newLeaders;
-      });
+    console.warn(`Leader at index ${index} failed to load. Retrying with a new character...`);
+    setLeaders(prevLeaders => {
+      const newLeaders = [...prevLeaders];
+      const newChar = drawPlayableCharacter([...newLeaders.filter(Boolean), ...retiredCards]);
+      if (newChar) {
+        newLeaders[index] = newChar;
+      } else {
+        newLeaders[index] = null;
+      }
+      return newLeaders;
+    });
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const payload = {
+      leaders,
+      currentTurn,
+      leadersPositions,
+      canPickFor,
+      decks,
+      placements,
+      retiredCards,
+      selectedSummon,
+      movementTracker,
+      gameLeaders,
+    };
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  }, [leaders, currentTurn, leadersPositions, canPickFor, decks, placements, retiredCards, selectedSummon, movementTracker, gameLeaders]);
+
+  const clearSavedGame = () => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.removeItem(STORAGE_KEY);
+  };
+
+  const resetGameState = () => {
+    clearSavedGame();
+    setLeaders(generateInitialLeaders());
+    setCurrentTurn('Player 1');
+    setLeadersPositions(createInitialLeaderPositions());
+    setSelectedLeader(null);
+    setSelectedNode(null);
+    setCanPickFor(null);
+    setDecks(buildEmptyDecks());
+    setPlacements([]);
+    setRetiredCards([]);
+    setSelectedSummon(null);
+    resetMovementTracker();
+    setSelectedUnit(null);
+    setGameLeaders(createGameLeaders());
   };
 
         const playerLabelToKey = (label) => (label === 'Player 1' ? 'p1' : 'p2');
@@ -566,6 +628,12 @@ const Board = () => {
         </div>
         <div className="flex items-center gap-3">
           <button
+            onClick={resetGameState}
+            className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold py-2 px-5 rounded shadow"
+          >
+            Reset Game
+          </button>
+          <button
             onClick={() => endPhase()}
             disabled={selectedSummon?.forced}
             className={`bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-5 rounded shadow transition-colors ${selectedSummon?.forced ? 'opacity-50 cursor-not-allowed' : ''}`}
@@ -602,7 +670,7 @@ const Board = () => {
       </div>
 
       {/* Center - Board */}
-      <div className="absolute inset-0 flex justify-center items-center pointer-events-none -translate-x-48">
+      <div className={`absolute inset-0 flex justify-center items-center pointer-events-none ${boardShiftClass}`}>
         <div className="relative h-[90vh]">
             <img 
               src={boardImg} 
@@ -667,7 +735,7 @@ const Board = () => {
       </div>
 
       {/* Right Side - Player Hands */}
-      <div className="flex flex-col justify-between h-full py-8 z-10 ml-auto gap-6">
+      <div className={`flex flex-col justify-between h-full py-8 z-10 ml-auto gap-6 ${playerDeckShiftClass}`}>
         {/* Player 1 (Opponent) */}
         <div className="flex flex-col items-end gap-3">
           <span className="text-red-400 font-bold text-2xl mr-2 drop-shadow-md tracking-wide">Player 1 Deck ({decks.p1.filter(Boolean).length})</span>
