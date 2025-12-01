@@ -108,6 +108,9 @@ const extractPortraitKey = (imageUrl = '') => {
   return normalizeKey(base);
 };
 
+const MAX_DECK_SIZE = 4;
+const DECK_INDEXES = Array.from({ length: MAX_DECK_SIZE }, (_, idx) => idx);
+
 const hasBoardAssetForCard = (imageUrl) => BOARD_COMPATIBLE_KEYS.has(extractPortraitKey(imageUrl));
 
 const getBoardAssetForPlayer = (imageUrl, playerKey) => {
@@ -141,6 +144,11 @@ const generateInitialLeaders = () => {
   }
   return picks;
 };
+
+const createMovementTracker = () => ({
+  p1: { leader: false, units: [] },
+  p2: { leader: false, units: [] },
+});
 
 const CardSlot = ({ isDeck, isEmpty, image, className = "", onError, bgColor = "bg-[#1a1a1a]", borderColor = "border-white" }) => {
   const isTiff = image && (image.toLowerCase().includes('.tif') || image.toLowerCase().includes('.tiff'));
@@ -181,14 +189,39 @@ const Board = () => {
   // After moving, the player may pick one of the 3 left-side characters
   const [canPickFor, setCanPickFor] = useState(null); // 'Player 1' | 'Player 2' | null
   // Deck/hand of picked characters waiting to be placed on the board
-  const [decks, setDecks] = useState({ p1: Array(4).fill(null), p2: Array(4).fill(null) });
+  const [decks, setDecks] = useState({ p1: Array(MAX_DECK_SIZE).fill(null), p2: Array(MAX_DECK_SIZE).fill(null) });
   // Cards already placed on the board (besides leaders)
   const [placements, setPlacements] = useState([]);
   const [retiredCards, setRetiredCards] = useState([]);
   // Currently selected summon card to place (may be forced right after pick)
   const [selectedSummon, setSelectedSummon] = useState(null);
-  const [turnHasMoved, setTurnHasMoved] = useState(false);
+  const [movementTracker, setMovementTracker] = useState(() => createMovementTracker());
   const [selectedUnit, setSelectedUnit] = useState(null);
+
+  const hasLeaderMoved = (playerKey) => Boolean(movementTracker[playerKey]?.leader);
+  const hasUnitMoved = (playerKey, deckIndex) => movementTracker[playerKey]?.units.includes(deckIndex);
+  const markLeaderMoved = (playerKey) => {
+    setMovementTracker((prev) => ({
+      ...prev,
+      [playerKey]: { ...prev[playerKey], leader: true },
+    }));
+  };
+  const markUnitMoved = (playerKey, deckIndex) => {
+    setMovementTracker((prev) => {
+      const existing = prev[playerKey]?.units ?? [];
+      if (existing.includes(deckIndex)) return prev;
+      return {
+        ...prev,
+        [playerKey]: {
+          ...prev[playerKey],
+          units: [...existing, deckIndex],
+        },
+      };
+    });
+  };
+  const resetMovementTracker = () => setMovementTracker(createMovementTracker());
+  const isPlayerDeckFull = (playerKey) => decks[playerKey].every(Boolean);
+  const bothDecksFull = isPlayerDeckFull('p1') && isPlayerDeckFull('p2');
 
   // Game Leaders Logic (P1 vs P2)
     const [gameLeaders] = useState(() => {
@@ -232,7 +265,7 @@ const Board = () => {
           const playerKey = playerLabelToKey(playerLabel);
           const piecesCount = getPlayerPieceCount(playerKey);
           const hasDraftOptions = leaders.some(Boolean);
-          if (piecesCount >= 4 || !hasDraftOptions) {
+          if (bothDecksFull || piecesCount >= 4 || !hasDraftOptions) {
             toggleTurn();
           } else {
             setCanPickFor(playerLabel);
@@ -246,7 +279,7 @@ const Board = () => {
           setSelectedNode(null);
           setCanPickFor(null);
           setSelectedSummon(null);
-          setTurnHasMoved(false);
+          resetMovementTracker();
         };
 
         const endPhase = () => {
@@ -287,16 +320,20 @@ const Board = () => {
             return;
           }
 
-          if (turnHasMoved) {
+          if (canPickFor && canPickFor === currentTurn) {
             return;
           }
 
           // If clicking on a node that has a leader
           const clickedIsP1 = leadersPositions.p1 === nodeId;
           const clickedIsP2 = leadersPositions.p2 === nodeId;
+          const clickedLeaderKey = clickedIsP1 ? 'p1' : clickedIsP2 ? 'p2' : null;
 
           // If current player clicked their own leader, select/deselect it
           if ((currentTurn === 'Player 1' && clickedIsP1) || (currentTurn === 'Player 2' && clickedIsP2)) {
+            if (hasLeaderMoved(clickedLeaderKey)) {
+              return;
+            }
             // Select or toggle off
             if (selectedLeader && selectedLeader.nodeId === nodeId) {
               setSelectedLeader(null);
@@ -312,6 +349,9 @@ const Board = () => {
           const currentPlayerKey = playerLabelToKey(currentTurn);
           const clickedUnit = placements.find(piece => piece.playerKey === currentPlayerKey && piece.nodeId === nodeId);
           if (clickedUnit) {
+            if (hasUnitMoved(currentPlayerKey, clickedUnit.deckIndex)) {
+              return;
+            }
             if (selectedUnit && selectedUnit.deckIndex === clickedUnit.deckIndex) {
               setSelectedUnit(null);
               setSelectedNode(null);
@@ -338,7 +378,7 @@ const Board = () => {
               // clear selection and pass turn
               setSelectedLeader(null);
               setSelectedNode(null);
-              setTurnHasMoved(true);
+              markLeaderMoved(selectedLeader.playerKey);
             }
             return;
           }
@@ -365,7 +405,7 @@ const Board = () => {
 
               setSelectedUnit(null);
               setSelectedNode(null);
-              setTurnHasMoved(true);
+              markUnitMoved(selectedUnit.playerKey, selectedUnit.deckIndex);
             }
             return;
           }
@@ -374,6 +414,11 @@ const Board = () => {
         const handlePickCard = (index) => {
           if (!canPickFor) return;
           if (currentTurn !== canPickFor) return;
+          if (bothDecksFull) {
+            setCanPickFor(null);
+            toggleTurn();
+            return;
+          }
 
           const card = leaders[index];
           if (!card) return; // no card to pick
@@ -460,7 +505,7 @@ const Board = () => {
 
           // If the card is already deployed (has a boardNodeId), allow selecting its on-board unit
           if (card.boardNodeId) {
-            if (turnHasMoved || selectedSummon || canPickFor) return;
+            if (selectedSummon || canPickFor || hasUnitMoved(playerKey, cardIndex)) return;
             const placed = placements.find(p => p.playerKey === playerKey && p.deckIndex === cardIndex);
             if (placed) {
               const nodeRef = nodes.find(n => n.id === placed.nodeId) || { x: 0, y: 0 };
@@ -501,7 +546,7 @@ const Board = () => {
     }
     return {
       label: 'Phase 1',
-      description: 'Gerakkan championmu satu petak untuk memulai giliran.'
+      description: 'Gerakkan semua championmu (leader maupun pasukan) masing-masing satu petak sebelum merekrut.'
     };
   }, [selectedSummon, canPickFor]);
 
@@ -541,7 +586,7 @@ const Board = () => {
         {/* 3 Vertical Slots */}
           <div className="flex flex-col gap-4">
               {[0,1,2].map(i => {
-                const isClickable = canPickFor && currentTurn === canPickFor && leaders[i];
+                const isClickable = canPickFor && currentTurn === canPickFor && leaders[i] && !bothDecksFull;
                 return (
                   <div
                     key={`left-card-${i}`}
@@ -633,12 +678,13 @@ const Board = () => {
                 <span className="text-xs font-semibold tracking-[0.2em] text-gray-700 uppercase">Leader</span>
               </div>
               <div className="flex gap-3">
-                {[0, 1, 2, 3].map(idx => {
+                {DECK_INDEXES.map(idx => {
                   const card = decks.p1[idx];
                   const deployed = Boolean(card?.boardNodeId);
                   const isSummonSelected = selectedSummon && selectedSummon.playerKey === 'p1' && selectedSummon.cardIndex === idx;
                   const isUnitSelected = selectedUnit && selectedUnit.playerKey === 'p1' && selectedUnit.deckIndex === idx;
-                  const allowMoveSelection = deployed && !turnHasMoved && !selectedSummon && !canPickFor;
+                  const unitAlreadyMoved = deployed && hasUnitMoved('p1', idx);
+                  const allowMoveSelection = deployed && !unitAlreadyMoved && !selectedSummon && !canPickFor;
                   const allowSummonSelection = !deployed && !selectedSummon?.forced;
                   const canInteract = currentTurn === 'Player 1' && Boolean(card) && (allowMoveSelection || allowSummonSelection);
                   const cursorClass = canInteract ? 'cursor-pointer hover:-translate-y-1 transition-transform' : 'cursor-not-allowed';
@@ -656,7 +702,9 @@ const Board = () => {
                     >
                       <CardSlot image={card?.portrait} isEmpty={Boolean(card)} bgColor="bg-white" borderColor={borderClass} className={deployed ? 'opacity-85' : ''} />
                       {deployed && (
-                        <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-bold uppercase tracking-wide text-green-700">In Play</span>
+                        <span className={`absolute -bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-bold uppercase tracking-wide ${unitAlreadyMoved ? 'text-gray-500' : 'text-green-700'}`}>
+                          {unitAlreadyMoved ? 'Moved' : 'In Play'}
+                        </span>
                       )}
                     </div>
                   );
@@ -676,12 +724,13 @@ const Board = () => {
                 <span className="text-xs font-semibold tracking-[0.2em] text-white uppercase">Leader</span>
               </div>
               <div className="flex gap-3">
-                {[0, 1, 2, 3].map(idx => {
+                {DECK_INDEXES.map(idx => {
                   const card = decks.p2[idx];
                   const deployed = Boolean(card?.boardNodeId);
                   const isSummonSelected = selectedSummon && selectedSummon.playerKey === 'p2' && selectedSummon.cardIndex === idx;
                   const isUnitSelected = selectedUnit && selectedUnit.playerKey === 'p2' && selectedUnit.deckIndex === idx;
-                  const allowMoveSelection = deployed && !turnHasMoved && !selectedSummon && !canPickFor;
+                  const unitAlreadyMoved = deployed && hasUnitMoved('p2', idx);
+                  const allowMoveSelection = deployed && !unitAlreadyMoved && !selectedSummon && !canPickFor;
                   const allowSummonSelection = !deployed && !selectedSummon?.forced;
                   const canInteract = currentTurn === 'Player 2' && Boolean(card) && (allowMoveSelection || allowSummonSelection);
                   const cursorClass = canInteract ? 'cursor-pointer hover:-translate-y-1 transition-transform' : 'cursor-not-allowed';
@@ -699,7 +748,9 @@ const Board = () => {
                     >
                       <CardSlot image={card?.portrait} isEmpty={Boolean(card)} bgColor="bg-black" borderColor={borderClass} className={deployed ? 'opacity-85' : ''} />
                       {deployed && (
-                        <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-bold uppercase tracking-wide text-cyan-200">In Play</span>
+                        <span className={`absolute -bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-bold uppercase tracking-wide ${unitAlreadyMoved ? 'text-gray-400' : 'text-cyan-200'}`}>
+                          {unitAlreadyMoved ? 'Moved' : 'In Play'}
+                        </span>
                       )}
                     </div>
                   );
