@@ -1,0 +1,121 @@
+{
+  "characters": [
+    {
+      "name": "Acrobat",
+      "type": "active",
+      "ability": "Jumps in a straight line over an adjacent character. May jump twice consecutively."
+    },
+    {
+      "name": "Rider",
+      "type": "active",
+      "ability": "Moves two spaces in a straight line."
+    },
+    {
+      "name": "Bruiser",
+      "type": "active",
+      "ability": "Moves to an adjacent enemy's space, pushing them to one of the opposite three spaces of your choice."
+    },
+    {
+      "name": "Royal Guard",
+      "type": "active",
+      "ability": "Moves from any space to a space adjacent to your Leader. May then move one additional space."
+    },
+    {
+      "name": "Illusionist",
+      "type": "active",
+      "ability": "Switches places with a non-adjacent, visible character in a straight line."
+    },
+    {
+      "name": "Claw Launcher",
+      "type": "active",
+      "ability": "Moves in a straight line all the way to a visible character, OR drags them until they are adjacent."
+    },
+    {
+      "name": "Manipulator",
+      "type": "active",
+      "ability": "Moves a non-adjacent enemy, visible in a straight line, by one space."
+    },
+    {
+      "name": "Wanderer",
+      "type": "active",
+      "ability": "Moves to any space non-adjacent to an enemy."
+    },
+    {
+      "name": "Brewmaster",
+      "type": "active",
+      "ability": "Moves an adjacent ally one space."
+    },
+    {
+      "name": "Archer",
+      "type": "passive",
+      "ability": "Can be two spaces in a straight line from the opponent's Leader and help capture them. The Leader does not need to be visible. However, does not help capture the opponent's Leader when adjacent."
+    },
+    {
+      "name": "Assassin",
+      "type": "passive",
+      "ability": "Captures the opponent's Leader when adjacent. (Without a second ally.)"
+    },
+    {
+      "name": "Jailer",
+      "type": "passive",
+      "ability": "Adjacent enemies with an active ability cannot use their ability.",
+      "notes": "Does not interrupt an action in progress if the enemy becomes adjacent during the action. (For example, if the Acrobat jumps once, placing them next to the Jailer, the Acrobat can still make their second jump.)"
+    },
+    {
+      "name": "Protector",
+      "type": "passive",
+      "ability": "Enemy abilities may not move the Protector or any adjacent allies."
+    },
+    {
+      "name": "Vizier",
+      "type": "passive",
+      "ability": "Your Leader may move one additional space during their action."
+    },
+    {
+      "name": "Hermit and Cub",
+      "type": "special",
+      "ability": "When you recruit them, take both the Hermit and the Cub and place each on an empty recruitment space (not necessarily adjacent). These two characters count as one during the recruitment phase. During the action phase, you can move either the Hermit or the Cub, or one after another.",
+      "notes": "The cub cannot help capture the opponent's Leader."
+    },
+    {
+      "name": "Nemesis",
+      "type": "special",
+      "ability": "Cannot take an action during their action phase. During your turn or your opponent's turn, after any action moving the opponent's Leader (one or more spaces), the Nemesis MUST move two spaces. The Nemesis cannot move away and back to their current space. If the Nemesis cannot move two spaces, move the Nemesis only one space. If that is not possible either, the Nemesis does not move.",
+      "reminders": [
+        "The Nemesis can move multiple times in one turn if different actions move the opponent's Leader (for example, the Leader's own action, then the Illusionist's action).",
+        "Regardless of the number of spaces the opponent Leader moves during an action (for example, with the Vizier's ability), the Nemesis only moves once (by two spaces). The Nemesis moves immediately after the triggering action is completed."
+      ]
+    }
+  ],
+  "ability_categories": {
+    "active": [
+      "Acrobat",
+      "Rider",
+      "Bruiser",
+      "Royal Guard",
+      "Illusionist",
+      "Claw Launcher",
+      "Manipulator",
+      "Wanderer",
+      "Brewmaster"
+    ],
+    "passive": [
+      "Archer",
+      "Assassin",
+      "Jailer",
+      "Protector",
+      "Vizier"
+    ],
+    "special": [
+      "Hermit and Cub",
+      "Nemesis"
+    ]
+  },
+  "game_terms": {
+    "characters": "Allies and enemies, including Leaders.",
+    "enemies": "Your opponent's characters, including their Leader.",
+    "allies": "Your characters, including your Leader.",
+    "movement": "Any effect that causes a character to change spaces on the game board is considered a movement. Movements may come from their own action or another character's abilities.",
+    "visible": "A character is visible to another if they are in a straight line AND there are no other characters between the two."
+  }
+}

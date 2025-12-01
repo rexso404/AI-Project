@@ -112,6 +112,51 @@ const MAX_DECK_SIZE = 4;
 const DECK_INDEXES = Array.from({ length: MAX_DECK_SIZE }, (_, idx) => idx);
 const STORAGE_KEY = 'leaders-game-state';
 
+const CHARACTER_DISPLAY_NAMES = {
+  acrobate: 'Acrobat',
+  archere: 'Archer',
+  assassin: 'Assassin',
+  cavalier: 'Rider',
+  cogneur: 'Bruiser',
+  garderoyal: 'Royal Guard',
+  geolier: 'Jailer',
+  illusionniste: 'Illusionist',
+  lancegrappin: 'Claw Launcher',
+  manipulatrice: 'Manipulator',
+  nemesis: 'Nemesis',
+  ourson: 'Cub',
+  protecteur: 'Protector',
+  rodeuse: 'Wanderer',
+  tavernier: 'Brewmaster',
+  vieilours: 'Hermit',
+  vizir: 'Vizier',
+};
+
+const LEADER_DISPLAY_NAMES = {
+  reine: 'Reine',
+  roi: 'Roi',
+};
+
+const CHARACTER_ABILITIES = {
+  acrobate: 'Jumps in a straight line over an adjacent character. May jump twice consecutively.',
+  archere: 'Two spaces away in a straight line, supports capturing the opposing Leader even if not visible.',
+  assassin: 'Captures the opponent Leader alone when adjacent.',
+  cavalier: 'Moves two spaces in a straight line.',
+  cogneur: 'Moves onto an adjacent enemy and pushes them to one of the opposite spaces.',
+  garderoyal: 'Teleports next to your Leader, then may move one extra space.',
+  illusionniste: 'Switches places with a visible non-adjacent character in a straight line.',
+  lancegrappin: 'Rushes in a straight line to a visible character or drags them adjacent.',
+  manipulatrice: 'Moves a visible non-adjacent enemy one space.',
+  nemesis: 'Must move two spaces after any action that moves the opposing Leader; cannot take its own action.',
+  ourson: 'Paired with the Hermit; deploy both and move either during your turn.',
+  protecteur: 'Enemy abilities cannot move the Protector or adjacent allies.',
+  rodeuse: 'Moves to any space not adjacent to an enemy.',
+  tavernier: 'Moves an adjacent ally one space.',
+  vieilours: 'Paired with the Cub; deploy both and move either during your turn.',
+  vizir: 'Your Leader may move one additional space during their action.',
+  geolier: 'Adjacent enemies with active abilities cannot use them.',
+};
+
 const buildEmptyDecks = () => ({
   p1: Array(MAX_DECK_SIZE).fill(null),
   p2: Array(MAX_DECK_SIZE).fill(null),
@@ -139,6 +184,20 @@ const createGameLeaders = () => {
 
 const playerLabelToKey = (label) => (label === 'Player 1' ? 'p1' : 'p2');
 const playerKeyToLabel = (key) => (key === 'p1' ? 'Player 1' : 'Player 2');
+
+const getCardDisplayName = (imageUrl) => {
+  if (!imageUrl) return '';
+  const key = extractPortraitKey(imageUrl);
+  if (!key) return '';
+  return CHARACTER_DISPLAY_NAMES[key] ?? LEADER_DISPLAY_NAMES[key] ?? '';
+};
+
+const getCardAbility = (imageUrl) => {
+  if (!imageUrl) return '';
+  const key = extractPortraitKey(imageUrl);
+  if (!key) return '';
+  return CHARACTER_ABILITIES[key] ?? '';
+};
 
 const createInitialLeaderPositions = () => ({ p1: 15, p2: 21 });
 
@@ -665,18 +724,29 @@ const Board = () => {
            <CardSlot label="DECK" isDeck />
         </div>
         
-        {/* 3 Vertical Slots */}
+          {/* 3 Vertical Slots */}
           <div className="flex flex-col gap-4">
               {[0,1,2].map(i => {
-                const isClickable = canPickFor && currentTurn === canPickFor && leaders[i] && !bothDecksFull;
+                const image = leaders[i];
+                const isClickable = canPickFor && currentTurn === canPickFor && image && !bothDecksFull;
+                const displayName = getCardDisplayName(image);
+                const abilityText = getCardAbility(image);
                 return (
                   <div
                     key={`left-card-${i}`}
                     onClick={() => { if (isClickable) handlePickCard(i); }}
-                    className={`${isClickable ? 'cursor-pointer hover:scale-105' : ''}`}
-                    title={isClickable ? 'Pick this character' : ''}
+                    className={`${isClickable ? 'cursor-pointer hover:scale-105' : ''} flex flex-col items-center gap-1 relative group`}
+                    title={isClickable ? 'Pick this character' : displayName}
                   >
-                    <CardSlot image={leaders[i]} isEmpty={!leaders[i]} onError={() => handleLeaderError(i)} bgColor="bg-black" borderColor="border-black" />
+                    <CardSlot image={image} isEmpty={!image} onError={() => handleLeaderError(i)} bgColor="bg-black" borderColor="border-black" />
+                    {displayName && <span className="text-xs font-semibold uppercase tracking-wide text-white drop-shadow-sm">{displayName}</span>}
+                    {abilityText && (
+                      <div className="pointer-events-none absolute -top-2 left-1/2 -translate-x-1/2 -translate-y-full opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                        <div className="bg-black/90 text-white text-[11px] leading-snug px-3 py-2 rounded-lg shadow-lg max-w-[14rem] text-center">
+                          {abilityText}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -776,17 +846,31 @@ const Board = () => {
                     : deployed
                       ? 'border-green-400'
                       : 'border-dashed border-[#b3a796]';
+                  const displayName = getCardDisplayName(card?.portrait ?? card?.boardImage);
+                  const abilityText = getCardAbility(card?.portrait ?? card?.boardImage);
+                  const statusLabel = unitAlreadyMoved ? 'Moved' : 'In Play';
+                  const statusColor = unitAlreadyMoved ? 'text-gray-500' : 'text-green-700';
                   return (
                     <div
                       key={`p1-card-${idx}`}
                       onClick={() => canInteract && handleDeckCardClick('p1', idx)}
-                      className={`${cursorClass} ${ringClass} rounded-xl relative`}
+                      className={`${cursorClass} ${ringClass} rounded-xl relative flex flex-col items-center group`}
                     >
                       <CardSlot image={card?.portrait} isEmpty={Boolean(card)} bgColor="bg-white" borderColor={borderClass} className={deployed ? 'opacity-85' : ''} />
-                      {deployed && (
-                        <span className={`absolute -bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-bold uppercase tracking-wide ${unitAlreadyMoved ? 'text-gray-500' : 'text-green-700'}`}>
-                          {unitAlreadyMoved ? 'Moved' : 'In Play'}
-                        </span>
+                      <div className="flex flex-col items-center mt-2 leading-tight">
+                        {displayName && (
+                          <span className="text-xs font-semibold uppercase tracking-wide text-gray-800">{displayName}</span>
+                        )}
+                        {deployed && (
+                          <span className={`text-[10px] font-bold uppercase tracking-wide ${statusColor}`}>{statusLabel}</span>
+                        )}
+                      </div>
+                      {abilityText && (
+                        <div className="pointer-events-none absolute -top-3 left-1/2 -translate-x-1/2 -translate-y-full opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                          <div className="bg-black/90 text-white text-[11px] leading-snug px-3 py-2 rounded-lg shadow-lg max-w-[14rem] text-center">
+                            {abilityText}
+                          </div>
+                        </div>
                       )}
                     </div>
                   );
@@ -822,17 +906,31 @@ const Board = () => {
                     : deployed
                       ? 'border-cyan-300'
                       : 'border-dashed border-[#6a5b4e]';
+                  const displayName = getCardDisplayName(card?.portrait ?? card?.boardImage);
+                  const abilityText = getCardAbility(card?.portrait ?? card?.boardImage);
+                  const statusLabel = unitAlreadyMoved ? 'Moved' : 'In Play';
+                  const statusColor = unitAlreadyMoved ? 'text-gray-400' : 'text-cyan-200';
                   return (
                     <div
                       key={`p2-card-${idx}`}
                       onClick={() => canInteract && handleDeckCardClick('p2', idx)}
-                      className={`${cursorClass} ${ringClass} rounded-xl relative`}
+                      className={`${cursorClass} ${ringClass} rounded-xl relative flex flex-col items-center group`}
                     >
                       <CardSlot image={card?.portrait} isEmpty={Boolean(card)} bgColor="bg-black" borderColor={borderClass} className={deployed ? 'opacity-85' : ''} />
-                      {deployed && (
-                        <span className={`absolute -bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-bold uppercase tracking-wide ${unitAlreadyMoved ? 'text-gray-400' : 'text-cyan-200'}`}>
-                          {unitAlreadyMoved ? 'Moved' : 'In Play'}
-                        </span>
+                      <div className="flex flex-col items-center mt-2 leading-tight">
+                        {displayName && (
+                          <span className="text-xs font-semibold uppercase tracking-wide text-white">{displayName}</span>
+                        )}
+                        {deployed && (
+                          <span className={`text-[10px] font-bold uppercase tracking-wide ${statusColor}`}>{statusLabel}</span>
+                        )}
+                      </div>
+                      {abilityText && (
+                        <div className="pointer-events-none absolute -top-3 left-1/2 -translate-x-1/2 -translate-y-full opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                          <div className="bg-black/90 text-white text-[11px] leading-snug px-3 py-2 rounded-lg shadow-lg max-w-[14rem] text-center">
+                            {abilityText}
+                          </div>
+                        </div>
                       )}
                     </div>
                   );
