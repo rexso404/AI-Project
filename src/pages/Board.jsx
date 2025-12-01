@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import gameData from '../../data.json';
 import boardImg from '../assets/board/Leaders_Board.png';
 import bgImg from '../assets/background/bg.jpg';
 import blankCardImg from '../assets/Blank/blank.png';
@@ -112,7 +113,12 @@ const MAX_DECK_SIZE = 4;
 const DECK_INDEXES = Array.from({ length: MAX_DECK_SIZE }, (_, idx) => idx);
 const STORAGE_KEY = 'leaders-game-state';
 
-const CHARACTER_DISPLAY_NAMES = {
+const LEADER_DISPLAY_NAMES = {
+  reine: 'Reine',
+  roi: 'Roi',
+};
+
+const CHARACTER_ALIAS_MAP = {
   acrobate: 'Acrobat',
   archere: 'Archer',
   assassin: 'Assassin',
@@ -124,38 +130,19 @@ const CHARACTER_DISPLAY_NAMES = {
   lancegrappin: 'Claw Launcher',
   manipulatrice: 'Manipulator',
   nemesis: 'Nemesis',
-  ourson: 'Cub',
+  ourson: 'Hermit and Cub',
+  vieilours: 'Hermit and Cub',
   protecteur: 'Protector',
   rodeuse: 'Wanderer',
   tavernier: 'Brewmaster',
-  vieilours: 'Hermit',
   vizir: 'Vizier',
 };
 
-const LEADER_DISPLAY_NAMES = {
-  reine: 'Reine',
-  roi: 'Roi',
-};
-
-const CHARACTER_ABILITIES = {
-  acrobate: 'Jumps in a straight line over an adjacent character. May jump twice consecutively.',
-  archere: 'Two spaces away in a straight line, supports capturing the opposing Leader even if not visible.',
-  assassin: 'Captures the opponent Leader alone when adjacent.',
-  cavalier: 'Moves two spaces in a straight line.',
-  cogneur: 'Moves onto an adjacent enemy and pushes them to one of the opposite spaces.',
-  garderoyal: 'Teleports next to your Leader, then may move one extra space.',
-  illusionniste: 'Switches places with a visible non-adjacent character in a straight line.',
-  lancegrappin: 'Rushes in a straight line to a visible character or drags them adjacent.',
-  manipulatrice: 'Moves a visible non-adjacent enemy one space.',
-  nemesis: 'Must move two spaces after any action that moves the opposing Leader; cannot take its own action.',
-  ourson: 'Paired with the Hermit; deploy both and move either during your turn.',
-  protecteur: 'Enemy abilities cannot move the Protector or adjacent allies.',
-  rodeuse: 'Moves to any space not adjacent to an enemy.',
-  tavernier: 'Moves an adjacent ally one space.',
-  vieilours: 'Paired with the Cub; deploy both and move either during your turn.',
-  vizir: 'Your Leader may move one additional space during their action.',
-  geolier: 'Adjacent enemies with active abilities cannot use them.',
-};
+const CHARACTER_DATA_MAP = gameData.characters.reduce((acc, character) => {
+  const key = normalizeKey(character.name);
+  if (key) acc[key] = character;
+  return acc;
+}, {});
 
 const buildEmptyDecks = () => ({
   p1: Array(MAX_DECK_SIZE).fill(null),
@@ -185,18 +172,27 @@ const createGameLeaders = () => {
 const playerLabelToKey = (label) => (label === 'Player 1' ? 'p1' : 'p2');
 const playerKeyToLabel = (key) => (key === 'p1' ? 'Player 1' : 'Player 2');
 
+const getCharacterInfo = (imageUrl) => {
+  if (!imageUrl) return null;
+  const assetKey = extractPortraitKey(imageUrl);
+  if (!assetKey) return null;
+  const aliasName = CHARACTER_ALIAS_MAP[assetKey];
+  if (!aliasName) return null;
+  return CHARACTER_DATA_MAP[normalizeKey(aliasName)] ?? null;
+};
+
 const getCardDisplayName = (imageUrl) => {
   if (!imageUrl) return '';
-  const key = extractPortraitKey(imageUrl);
-  if (!key) return '';
-  return CHARACTER_DISPLAY_NAMES[key] ?? LEADER_DISPLAY_NAMES[key] ?? '';
+  const assetKey = extractPortraitKey(imageUrl);
+  if (!assetKey) return '';
+  const info = getCharacterInfo(imageUrl);
+  if (info?.name) return info.name;
+  return LEADER_DISPLAY_NAMES[assetKey] ?? '';
 };
 
 const getCardAbility = (imageUrl) => {
-  if (!imageUrl) return '';
-  const key = extractPortraitKey(imageUrl);
-  if (!key) return '';
-  return CHARACTER_ABILITIES[key] ?? '';
+  const info = getCharacterInfo(imageUrl);
+  return info?.ability ?? '';
 };
 
 const createInitialLeaderPositions = () => ({ p1: 15, p2: 21 });
