@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import gameData from '../../data.json';
 import boardImg from '../assets/board/Leaders_Board.png';
 import bgImg from '../assets/background/bg.jpg';
@@ -267,6 +267,34 @@ const CardSlot = ({ isDeck, isEmpty, image, className = "", onError, bgColor = "
   );
 };
 
+const AbilityTooltip = ({ text, placement = 'right' }) => {
+  if (!text) return null;
+
+  if (placement === 'top') {
+    return (
+      <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 -mb-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+        <div className="relative bg-[#fffdf6]/95 text-slate-900 text-[12px] leading-relaxed px-5 py-3 rounded-2xl shadow-[0_12px_25px_rgba(0,0,0,0.35)] border border-[#f0c674] w-72 text-left">
+          <p className="whitespace-normal break-words">
+            {text}
+          </p>
+          <span aria-hidden="true" className="absolute left-1/2 -bottom-2 -translate-x-1/2 w-3 h-3 bg-[#fffdf6]/95 border-r border-b border-[#f0c674] rotate-45"></span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+      <div className="relative bg-[#fffdf6]/95 text-slate-900 text-[12px] leading-relaxed px-5 py-3 rounded-2xl shadow-[0_12px_25px_rgba(0,0,0,0.35)] border border-[#f0c674] w-72 text-left">
+        <p className="whitespace-normal break-words">
+          {text}
+        </p>
+        <span aria-hidden="true" className="absolute -left-2 top-1/2 -translate-y-1/2 w-3 h-3 bg-[#fffdf6]/95 border-l border-t border-[#f0c674] rotate-45"></span>
+      </div>
+    </div>
+  );
+};
+
 const Board = () => {
   const nodes = useMemo(() => getBoardNodes(), []);
   const columnMaxRow = useMemo(() => {
@@ -305,6 +333,9 @@ const Board = () => {
   const [selectedSummon, setSelectedSummon] = useState(() => savedGame?.selectedSummon ?? null);
   const [movementTracker, setMovementTracker] = useState(() => savedGame?.movementTracker ?? createMovementTracker());
   const [selectedUnit, setSelectedUnit] = useState(null);
+  const [statusMessage, setStatusMessage] = useState(() => savedGame?.statusMessage ?? '');
+  const [gameResult, setGameResult] = useState(() => savedGame?.gameResult ?? null);
+  const isGameOver = Boolean(gameResult);
 
   const hasLeaderMoved = (playerKey) => Boolean(movementTracker[playerKey]?.leader);
   const hasUnitMoved = (playerKey, deckIndex) => movementTracker[playerKey]?.units.includes(deckIndex);
@@ -330,7 +361,7 @@ const Board = () => {
   const resetMovementTracker = () => setMovementTracker(createMovementTracker());
   const isPlayerDeckFull = (playerKey) => decks[playerKey].every(Boolean);
   const bothDecksFull = isPlayerDeckFull('p1') && isPlayerDeckFull('p2');
-  const boardShiftClass = bothDecksFull ? '-translate-x-24' : '-translate-x-48';
+  const boardShiftClass = '-translate-x-48';
   const playerDeckShiftClass = bothDecksFull ? '-translate-x-12' : '';
 
   // Game Leaders Logic (P1 vs P2)
@@ -340,7 +371,7 @@ const Board = () => {
     console.warn(`Leader at index ${index} failed to load. Retrying with a new character...`);
     setLeaders(prevLeaders => {
       const newLeaders = [...prevLeaders];
-      const newChar = drawPlayableCharacter([...newLeaders.filter(Boolean), ...retiredCards]);
+      const newChar = drawPlayableCharacter(newLeaders.filter(Boolean));
       if (newChar) {
         newLeaders[index] = newChar;
       } else {
@@ -363,9 +394,11 @@ const Board = () => {
       selectedSummon,
       movementTracker,
       gameLeaders,
+      statusMessage,
+      gameResult,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [leaders, currentTurn, leadersPositions, canPickFor, decks, placements, retiredCards, selectedSummon, movementTracker, gameLeaders]);
+  }, [leaders, currentTurn, leadersPositions, canPickFor, decks, placements, retiredCards, selectedSummon, movementTracker, gameLeaders, statusMessage, gameResult]);
 
   const clearSavedGame = () => {
     if (typeof window === 'undefined') return;
@@ -388,11 +421,42 @@ const Board = () => {
     resetMovementTracker();
     setSelectedUnit(null);
     setGameLeaders(freshGameLeaders);
+    setStatusMessage('');
+    setGameResult(null);
   };
+
+  const ensureLeaderSupply = useCallback(() => {
+    setLeaders(prev => {
+      if (prev.every(Boolean)) return prev;
+      const next = [...prev];
+      const excludePool = next.filter(Boolean);
+      let modified = false;
+
+      next.forEach((slot, idx) => {
+        if (!slot) {
+          const replacement = drawPlayableCharacter(excludePool);
+          if (replacement) {
+            next[idx] = replacement;
+            excludePool.push(replacement);
+            modified = true;
+          }
+        }
+      });
+
+      return modified ? next : prev;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (leaders.some(card => !card)) {
+      ensureLeaderSupply();
+    }
+  }, [leaders, ensureLeaderSupply]);
 
         const getPlayerPieceCount = (playerKey) => placements.filter(piece => piece.playerKey === playerKey).length;
 
         const handlePostMove = (playerLabel) => {
+          if (isGameOver) return;
           const playerKey = playerLabelToKey(playerLabel);
           const piecesCount = getPlayerPieceCount(playerKey);
           const hasDraftOptions = leaders.some(Boolean);
@@ -404,6 +468,7 @@ const Board = () => {
         };
 
         const toggleTurn = () => {
+          if (isGameOver) return;
           setCurrentTurn(prev => prev === 'Player 1' ? 'Player 2' : 'Player 1');
           setSelectedLeader(null);
           setSelectedUnit(null);
@@ -411,9 +476,11 @@ const Board = () => {
           setCanPickFor(null);
           setSelectedSummon(null);
           resetMovementTracker();
+          setStatusMessage('');
         };
 
         const endPhase = () => {
+          if (isGameOver) return;
           if (selectedSummon?.forced) return; // cannot change phase while forced placement is pending
           handlePostMove(currentTurn);
         };
@@ -443,7 +510,90 @@ const Board = () => {
           return dx <= 1 && dy <= 1 && !(dx === 0 && dy === 0);
         };
 
+        const getAdjacentNodeIds = (nodeId) => {
+          const target = nodes.find(n => n.id === nodeId);
+          if (!target) return [];
+          return nodes
+            .filter(n => {
+              const dx = Math.abs(n.x - target.x);
+              const dy = Math.abs(n.y - target.y);
+              return (dx > 0 || dy > 0) && dx <= 1 && dy <= 1;
+            })
+            .map(n => n.id);
+        };
+
+        const getNodeOccupant = (nodeId, leaderPositionsState = leadersPositions, placementsState = placements) => {
+          if (leaderPositionsState.p1 === nodeId) return { type: 'leader', playerKey: 'p1' };
+          if (leaderPositionsState.p2 === nodeId) return { type: 'leader', playerKey: 'p2' };
+          const unit = placementsState.find(piece => piece.nodeId === nodeId);
+          return unit ? { ...unit, type: 'unit' } : null;
+        };
+
+        const evaluateLeaderState = (playerKey, placementsState = placements, leaderPositionsState = leadersPositions) => {
+          const leaderNodeId = leaderPositionsState[playerKey];
+          const adjacentIds = getAdjacentNodeIds(leaderNodeId);
+          const enemyKey = playerKey === 'p1' ? 'p2' : 'p1';
+          let enemyCount = 0;
+          let allOccupied = adjacentIds.length > 0;
+
+          adjacentIds.forEach(id => {
+            const occupant = getNodeOccupant(id, leaderPositionsState, placementsState);
+            if (!occupant) {
+              allOccupied = false;
+            } else if (occupant.playerKey === enemyKey && occupant.type !== 'leader') {
+              enemyCount += 1;
+            }
+          });
+
+          return {
+            captured: enemyCount >= 2,
+            surrounded: allOccupied,
+          };
+        };
+
+        const wouldTrapSelf = (playerKey, placementsState, leaderPositionsState) => {
+          const status = evaluateLeaderState(playerKey, placementsState, leaderPositionsState);
+          return status.captured || status.surrounded;
+        };
+
+        const determineGameOutcome = (placementsState = placements, leaderPositionsState = leadersPositions) => {
+          const p1Status = evaluateLeaderState('p1', placementsState, leaderPositionsState);
+          if (p1Status.captured || p1Status.surrounded) {
+            return {
+              winner: playerKeyToLabel('p2'),
+              loser: playerKeyToLabel('p1'),
+              reason: p1Status.captured ? 'capture' : 'surround',
+            };
+          }
+
+          const p2Status = evaluateLeaderState('p2', placementsState, leaderPositionsState);
+          if (p2Status.captured || p2Status.surrounded) {
+            return {
+              winner: playerKeyToLabel('p1'),
+              loser: playerKeyToLabel('p2'),
+              reason: p2Status.captured ? 'capture' : 'surround',
+            };
+          }
+
+          return null;
+        };
+
+        const finalizeActionOutcome = (placementsState, leaderPositionsState) => {
+          const outcome = determineGameOutcome(placementsState, leaderPositionsState);
+          if (outcome) {
+            setGameResult(outcome);
+            setStatusMessage('');
+            setSelectedLeader(null);
+            setSelectedUnit(null);
+            setSelectedSummon(null);
+            setCanPickFor(null);
+            return true;
+          }
+          return false;
+        };
+
         const handleNodeClick = (node, image) => {
+          if (isGameOver) return;
           const nodeId = node.id;
 
           if (selectedSummon) {
@@ -499,17 +649,25 @@ const Board = () => {
             const fromNode = selectedLeader.nodeId;
             const toNode = nodeId;
             if (isNodeEmpty(toNode) && isWithinMoveRange(fromNode, toNode)) {
-              // perform move
-              setLeadersPositions(prev => {
-                const next = { ...prev };
-                if (selectedLeader.player === 'Player 1') next.p1 = toNode;
-                else next.p2 = toNode;
-                return next;
-              });
-              // clear selection and pass turn
+              const leaderKey = selectedLeader.playerKey;
+              const nextPositions = {
+                ...leadersPositions,
+                [leaderKey]: toNode,
+              };
+
+              if (wouldTrapSelf(leaderKey, placements, nextPositions)) {
+                setStatusMessage('You cannot move your leader into capture or surround range.');
+                return;
+              }
+
+              setLeadersPositions(nextPositions);
+              setStatusMessage('');
               setSelectedLeader(null);
               setSelectedNode(null);
-              markLeaderMoved(selectedLeader.playerKey);
+              markLeaderMoved(leaderKey);
+              if (finalizeActionOutcome(placements, nextPositions)) {
+                return;
+              }
             }
             return;
           }
@@ -518,31 +676,40 @@ const Board = () => {
             const fromNode = selectedUnit.nodeId;
             const toNode = nodeId;
             if (isNodeEmpty(toNode) && isWithinMoveRange(fromNode, toNode)) {
-              setPlacements(prev => prev.map(piece => {
-                if (piece.playerKey === selectedUnit.playerKey && piece.deckIndex === selectedUnit.deckIndex) {
+              const playerKey = selectedUnit.playerKey;
+              const nextPlacements = placements.map(piece => {
+                if (piece.playerKey === playerKey && piece.deckIndex === selectedUnit.deckIndex) {
                   return { ...piece, nodeId: toNode };
                 }
                 return piece;
-              }));
-
-              setDecks(prev => {
-                const next = { ...prev };
-                next[selectedUnit.playerKey] = next[selectedUnit.playerKey].map((card, idx) => {
-                  if (idx !== selectedUnit.deckIndex || !card) return card;
-                  return { ...card, boardNodeId: toNode };
-                });
-                return next;
               });
 
+              if (wouldTrapSelf(playerKey, nextPlacements, leadersPositions)) {
+                setStatusMessage('Moving that unit would trap your own leader.');
+                return;
+              }
+
+              const updatedDeck = decks[playerKey].map((card, idx) => {
+                if (idx !== selectedUnit.deckIndex || !card) return card;
+                return { ...card, boardNodeId: toNode };
+              });
+
+              const nextDecks = { ...decks, [playerKey]: updatedDeck };
+
+              setPlacements(nextPlacements);
+              setDecks(nextDecks);
+              setStatusMessage('');
               setSelectedUnit(null);
               setSelectedNode(null);
-              markUnitMoved(selectedUnit.playerKey, selectedUnit.deckIndex);
+              markUnitMoved(playerKey, selectedUnit.deckIndex);
+              finalizeActionOutcome(nextPlacements, leadersPositions);
             }
             return;
           }
         };
 
         const handlePickCard = (index) => {
+          if (isGameOver) return;
           if (!canPickFor) return;
           if (currentTurn !== canPickFor) return;
           if (bothDecksFull) {
@@ -586,7 +753,7 @@ const Board = () => {
           setLeaders(prev => {
             const next = [...prev];
             next[index] = null;
-            const exclude = [...next.filter(Boolean), ...updatedRetired];
+            const exclude = next.filter(Boolean);
             const replacement = drawPlayableCharacter(exclude);
             next[index] = replacement;
             return next;
@@ -604,6 +771,7 @@ const Board = () => {
         };
 
         const attemptPlacement = (node) => {
+          if (isGameOver) return;
           if (!selectedSummon || !node) return;
           const { playerKey, cardIndex, image } = selectedSummon;
           const playerLabel = playerKeyToLabel(playerKey);
@@ -612,22 +780,33 @@ const Board = () => {
           if (!isValidPlacementNode(playerKey, node)) return;
           if (!isNodeEmpty(node.id)) return;
 
-          setPlacements(prev => [...prev, { nodeId: node.id, playerKey, image, deckIndex: cardIndex }]);
+          const nextPlacements = [...placements, { nodeId: node.id, playerKey, image, deckIndex: cardIndex }];
 
-          setDecks(prev => {
-            const next = { ...prev };
-            next[playerKey] = next[playerKey].map((card, idx) => {
+          if (wouldTrapSelf(playerKey, nextPlacements, leadersPositions)) {
+            setStatusMessage('This placement would trap your own leader. Choose another spot.');
+            return;
+          }
+
+          const nextDecks = {
+            ...decks,
+            [playerKey]: decks[playerKey].map((card, idx) => {
               if (idx !== cardIndex || !card) return card;
               return { ...card, boardNodeId: node.id };
-            });
-            return next;
-          });
+            })
+          };
 
+          setPlacements(nextPlacements);
+          setDecks(nextDecks);
           setSelectedSummon(null);
+          setStatusMessage('');
+          if (finalizeActionOutcome(nextPlacements, leadersPositions)) {
+            return;
+          }
           toggleTurn();
         };
 
         const handleDeckCardClick = (playerKey, cardIndex) => {
+          if (isGameOver) return;
           if (selectedSummon?.forced) return; // must resolve forced placement first
           const card = decks[playerKey][cardIndex];
           if (!card) return;
@@ -666,6 +845,14 @@ const Board = () => {
         };
 
   const phaseInfo = useMemo(() => {
+    if (isGameOver) {
+      return {
+        label: 'Game Over',
+        description: gameResult
+          ? `${gameResult.winner} wins by ${gameResult.reason === 'capture' ? 'capture' : 'surround'}.`
+          : 'Victory resolved.'
+      };
+    }
     // Merge Phase 3 into Phase 2: both picking and placing are part of Phase 2 now
     if (canPickFor || selectedSummon) {
       return {
@@ -679,7 +866,7 @@ const Board = () => {
       label: 'Phase 1',
       description: 'Gerakkan semua championmu (leader maupun pasukan) masing-masing satu petak sebelum merekrut.'
     };
-  }, [selectedSummon, canPickFor]);
+  }, [selectedSummon, canPickFor, isGameOver, gameResult]);
 
   return (
     <div 
@@ -712,6 +899,12 @@ const Board = () => {
         </div>
       </div>
 
+      {!isGameOver && statusMessage && (
+        <div className="w-full bg-amber-100 text-amber-900 text-center font-semibold py-2 shadow-inner z-40">
+          {statusMessage}
+        </div>
+      )}
+
       <div className="flex-1 flex items-center justify-between p-8 relative w-full">
       {/* Left Side - Deck & Slots */}
       <div className="flex items-center gap-4 z-10">
@@ -736,13 +929,7 @@ const Board = () => {
                   >
                     <CardSlot image={image} isEmpty={!image} onError={() => handleLeaderError(i)} bgColor="bg-black" borderColor="border-black" />
                     {displayName && <span className="text-xs font-semibold uppercase tracking-wide text-white drop-shadow-sm">{displayName}</span>}
-                    {abilityText && (
-                      <div className="pointer-events-none absolute -top-2 left-1/2 -translate-x-1/2 -translate-y-full opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                        <div className="bg-black/90 text-white text-[11px] leading-snug px-3 py-2 rounded-lg shadow-lg max-w-[14rem] text-center">
-                          {abilityText}
-                        </div>
-                      </div>
-                    )}
+                    <AbilityTooltip text={abilityText} />
                   </div>
                 )
               })}
@@ -861,13 +1048,7 @@ const Board = () => {
                           <span className={`text-[10px] font-bold uppercase tracking-wide ${statusColor}`}>{statusLabel}</span>
                         )}
                       </div>
-                      {abilityText && (
-                        <div className="pointer-events-none absolute -top-3 left-1/2 -translate-x-1/2 -translate-y-full opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                          <div className="bg-black/90 text-white text-[11px] leading-snug px-3 py-2 rounded-lg shadow-lg max-w-[14rem] text-center">
-                            {abilityText}
-                          </div>
-                        </div>
-                      )}
+                      <AbilityTooltip text={abilityText} placement="top" />
                     </div>
                   );
                 })}
@@ -921,13 +1102,7 @@ const Board = () => {
                           <span className={`text-[10px] font-bold uppercase tracking-wide ${statusColor}`}>{statusLabel}</span>
                         )}
                       </div>
-                      {abilityText && (
-                        <div className="pointer-events-none absolute -top-3 left-1/2 -translate-x-1/2 -translate-y-full opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                          <div className="bg-black/90 text-white text-[11px] leading-snug px-3 py-2 rounded-lg shadow-lg max-w-[14rem] text-center">
-                            {abilityText}
-                          </div>
-                        </div>
-                      )}
+                      <AbilityTooltip text={abilityText} placement="top" />
                     </div>
                   );
                 })}
@@ -937,6 +1112,23 @@ const Board = () => {
         </div>
       </div>
       </div>
+
+      {gameResult && (
+        <div className="absolute inset-0 bg-black/70 flex items-center justify-center px-6" style={{ zIndex: 60 }}>
+          <div className="bg-white/95 rounded-2xl shadow-2xl px-10 py-8 text-center max-w-lg">
+            <p className="text-3xl font-bold text-gray-900 mb-2">{gameResult.winner} Wins!</p>
+            <p className="text-lg text-gray-700 mb-6">
+              Victory by {gameResult.reason === 'capture' ? 'leader capture' : 'surrounding the leader'}.
+            </p>
+            <button
+              onClick={resetGameState}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2 px-6 rounded-lg shadow"
+            >
+              Play Again
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
