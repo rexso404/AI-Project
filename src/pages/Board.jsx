@@ -122,7 +122,7 @@ const BOARD_COMPATIBLE_KEYS = new Set([
   ...Object.keys(WHITE_CHARACTER_MAP),
   ...Object.keys(BLACK_CHARACTER_MAP),
 ]);
-const IMPLEMENTED_ACTIVE_ABILITIES = new Set(['acrobate', 'cavalier', 'manipulatrice', 'garderoyal', 'lancegrappin']);
+const IMPLEMENTED_ACTIVE_ABILITIES = new Set(['acrobate', 'cavalier', 'manipulatrice', 'garderoyal', 'lancegrappin', 'tavernier']);
 
 const getBoardImageForAlias = (aliasKey, playerKey) => {
   if (!aliasKey || !playerKey) return null;
@@ -937,6 +937,46 @@ const Board = () => {
     };
   };
 
+  const initializeBrewmasterAbility = (piece, deckCard) => {
+    const originNode = nodeMap.get(piece.nodeId);
+    if (!originNode) return null;
+
+    // Cari ally yang adjacent ke Brewmaster
+    const adjacentIds = getAdjacentNodeIds(originNode.id);
+    const adjacentAllies = placements.filter(unit =>
+      unit.playerKey === piece.playerKey &&
+      adjacentIds.includes(unit.nodeId)
+    );
+
+    if (!adjacentAllies.length) {
+      setStatusMessage('Brewmaster membutuhkan ally di sekitarnya untuk menggunakan ability.');
+      return null;
+    }
+
+    const highlightNodes = adjacentAllies.map(unit => unit.nodeId);
+    setStatusMessage('Pilih satu ally adjacent untuk dipindahkan oleh Brewmaster.');
+    return {
+      id: piece.cardKey,
+      abilityName: deckCard?.abilityName ?? piece.abilityName ?? getCardDisplayName(piece.portrait ?? ''),
+      playerKey: piece.playerKey,
+      playerLabel: playerKeyToLabel(piece.playerKey),
+      deckIndex: piece.deckIndex,
+      tokenId: piece.tokenId ?? null,
+      originNodeId: piece.nodeId,
+      phase: 'brew-select-ally',
+      highlightNodes,
+      data: {
+        hasProgress: false,
+        allies: adjacentAllies.map(unit => ({
+          nodeId: unit.nodeId,
+          playerKey: unit.playerKey,
+          deckIndex: unit.deckIndex,
+          tokenId: unit.tokenId ?? null,
+        })),
+      },
+    };
+  };
+
   const concludeAbilityUsage = (placementsState, message) => {
     if (!abilityContext) return;
     const abilityMeta = abilityContext;
@@ -1080,6 +1120,12 @@ const Board = () => {
     }
     if (piece.cardKey === 'lancegrappin') {
       const initialized = initializeClawLauncherAbility(piece, deckCard);
+      if (!initialized) return;
+      setAbilityContext(initialized);
+      return;
+    }
+    if (piece.cardKey === 'tavernier') {
+      const initialized = initializeBrewmasterAbility(piece, deckCard);
       if (!initialized) return;
       setAbilityContext(initialized);
       return;
@@ -1516,6 +1562,114 @@ const Board = () => {
       }
 
       setStatusMessage('Ability Claw Launcher dibatalkan.');
+      setAbilityContext(null);
+      return;
+    }
+
+    if (abilityContext.id === 'tavernier') {
+      const activePiece = getAbilityPieceInstance(abilityContext);
+      if (!activePiece) {
+        setAbilityContext(null);
+        setStatusMessage('Selected unit is no longer available.');
+        return;
+      }
+
+      // Tahap 1: pilih ally adjacent
+      if (abilityContext.phase === 'brew-select-ally') {
+        const targetPlacement = placements.find(p =>
+          p.nodeId === node.id &&
+          p.playerKey === activePiece.playerKey
+        );
+        if (!targetPlacement) {
+          setStatusMessage('Pilih satu ally adjacent yang disorot.');
+          return;
+        }
+
+        const targetNode = nodes.find(n => n.id === targetPlacement.nodeId);
+        if (!targetNode) {
+          setAbilityContext(null);
+          setStatusMessage('Ally tidak lagi berada di petak valid.');
+          return;
+        }
+
+        // Mirip Manipulator: cari semua petak 1 langkah di sekitar target yang kosong
+        const candidateIds = getAdjacentNodeIds(targetNode.id);
+        const movableNodes = candidateIds.filter(id => isNodeEmpty(id));
+
+        if (!movableNodes.length) {
+          setStatusMessage('Sekitar ally penuh, pilih ally lain.');
+          return;
+        }
+
+        setAbilityContext({
+          ...abilityContext,
+          phase: 'brew-select-destination',
+          highlightNodes: movableNodes,
+          data: {
+            ...abilityContext.data,
+            hasProgress: true,
+            selectedAlly: {
+              nodeId: targetPlacement.nodeId,
+              playerKey: targetPlacement.playerKey,
+              deckIndex: targetPlacement.deckIndex,
+              tokenId: targetPlacement.tokenId ?? null,
+            },
+          },
+        });
+        setStatusMessage('Pilih petak kosong di sekitar ally untuk memindahkannya.');
+        return;
+      }
+
+      // Tahap 2: pilih petak tujuan untuk ally
+      if (abilityContext.phase === 'brew-select-destination') {
+        const selected = abilityContext.data?.selectedAlly;
+        if (!selected) {
+          setAbilityContext(null);
+          setStatusMessage('Ally tidak lagi tersedia.');
+          return;
+        }
+
+        if (!abilityContext.highlightNodes?.includes(node.id)) {
+          setStatusMessage('Pilih salah satu petak yang disorot.');
+          return;
+        }
+
+        const allyPlacement = placements.find(p =>
+          p.nodeId === selected.nodeId &&
+          p.playerKey === selected.playerKey &&
+          p.deckIndex === selected.deckIndex &&
+          (selected.tokenId == null || p.tokenId === selected.tokenId)
+        );
+        if (!allyPlacement) {
+          setAbilityContext(null);
+          setStatusMessage('Ally tersebut sudah tidak ada.');
+          return;
+        }
+
+        if (!isNodeEmpty(node.id)) {
+          setStatusMessage('Petak ini sudah terisi. Pilih petak lain.');
+          return;
+        }
+
+        const updatedPlacements = placements.map(p =>
+          p === allyPlacement ? { ...p, nodeId: node.id } : p
+        );
+
+        setPlacements(updatedPlacements);
+        setDecks(prev => ({
+          ...prev,
+          [allyPlacement.playerKey]: prev[allyPlacement.playerKey].map((card, idx) => {
+            if (idx !== allyPlacement.deckIndex || !card) return card;
+            if (card.isDual) return card;
+            return { ...card, boardNodeId: node.id };
+          }),
+        }));
+
+        concludeAbilityUsage(updatedPlacements, 'Brewmaster memindahkan ally satu petak.');
+        return;
+      }
+
+      setStatusMessage('Ability Brewmaster dibatalkan.');
       setAbilityContext(null);
       return;
     }
