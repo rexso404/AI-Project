@@ -122,7 +122,7 @@ const BOARD_COMPATIBLE_KEYS = new Set([
   ...Object.keys(WHITE_CHARACTER_MAP),
   ...Object.keys(BLACK_CHARACTER_MAP),
 ]);
-const IMPLEMENTED_ACTIVE_ABILITIES = new Set(['acrobate', 'cavalier', 'manipulatrice']);
+const IMPLEMENTED_ACTIVE_ABILITIES = new Set(['acrobate', 'cavalier', 'manipulatrice', 'garderoyal', 'lancegrappin']);
 
 const getBoardImageForAlias = (aliasKey, playerKey) => {
   if (!aliasKey || !playerKey) return null;
@@ -836,6 +836,107 @@ const Board = () => {
     };
   };
 
+  const initializeRoyalGuardAbility = (piece, deckCard) => {
+    const leaderNodeId = leadersPositions[piece.playerKey];
+    const leaderNode = nodeMap.get(leaderNodeId);
+    if (!leaderNode) {
+      setStatusMessage('Leader tidak ditemukan di papan.');
+      return null;
+    }
+
+    // Langkah 1: cari semua petak kosong yang adjacent ke leader
+    const adjacentToLeader = getAdjacentNodeIds(leaderNodeId).filter(id =>
+      isNodeEmpty(id)
+    );
+    if (!adjacentToLeader.length) {
+      setStatusMessage('Tidak ada petak kosong di sekitar Leader untuk Royal Guard.');
+      return null;
+    }
+
+    setStatusMessage('Pilih petak kosong di sekitar Leader untuk Royal Guard, lalu pilih satu petak lagi untuk langkah tambahan.');
+    return {
+      id: piece.cardKey,
+      abilityName: deckCard?.abilityName ?? piece.abilityName ?? getCardDisplayName(piece.portrait ?? ''),
+      playerKey: piece.playerKey,
+      playerLabel: playerKeyToLabel(piece.playerKey),
+      deckIndex: piece.deckIndex,
+      tokenId: piece.tokenId ?? null,
+      originNodeId: piece.nodeId,
+      phase: 'royal-select-adjacent',
+      highlightNodes: adjacentToLeader,
+      data: {
+        hasProgress: false,
+        leaderNodeId,
+      },
+    };
+  };
+
+  const initializeClawLauncherAbility = (piece, deckCard) => {
+    const originNode = nodeMap.get(piece.nodeId);
+    if (!originNode) {
+      setStatusMessage('Claw Launcher tidak berada di petak papan yang valid.');
+      return null;
+    }
+
+    const enemyKey = piece.playerKey === 'p1' ? 'p2' : 'p1';
+
+    const visibleTargets = placements.filter(unit => {
+      if (unit.playerKey !== enemyKey) return false;
+      const targetNode = nodeMap.get(unit.nodeId);
+      if (!targetNode) return false;
+
+      const sameCol = Math.abs(targetNode.x - originNode.x) <= FLOAT_TOLERANCE;
+      const sameRow = Math.abs(targetNode.y - originNode.y) <= FLOAT_TOLERANCE;
+      if (!sameCol && !sameRow) return false;
+
+      const dx = targetNode.x - originNode.x;
+      const dy = targetNode.y - originNode.y;
+      const stepX = dx === 0 ? 0 : dx > 0 ? 1 : -1;
+      const stepY = dy === 0 ? 0 : dy > 0 ? 1 : -1;
+
+      let currentX = originNode.x + stepX;
+      let currentY = originNode.y + stepY;
+      while (Math.abs(currentX - targetNode.x) > FLOAT_TOLERANCE || Math.abs(currentY - targetNode.y) > FLOAT_TOLERANCE) {
+        const blocker = findNodeByCoordinates(currentX, currentY);
+        if (blocker) {
+          const occ = getNodeOccupant(blocker.id, leadersPositions, placements);
+          if (occ) return false;
+        }
+        currentX += stepX;
+        currentY += stepY;
+      }
+      return true;
+    });
+
+    if (!visibleTargets.length) {
+      setStatusMessage('Tidak ada karakter yang terlihat dalam garis lurus untuk Claw Launcher.');
+      return null;
+    }
+
+    const highlightNodes = visibleTargets.map(unit => unit.nodeId);
+    setStatusMessage('Pilih satu karakter yang disorot untuk Claw Launcher.');
+    return {
+      id: piece.cardKey,
+      abilityName: deckCard?.abilityName ?? piece.abilityName ?? getCardDisplayName(piece.portrait ?? ''),
+      playerKey: piece.playerKey,
+      playerLabel: playerKeyToLabel(piece.playerKey),
+      deckIndex: piece.deckIndex,
+      tokenId: piece.tokenId ?? null,
+      originNodeId: piece.nodeId,
+      phase: 'claw-select-target',
+      highlightNodes,
+      data: {
+        hasProgress: false,
+        targets: visibleTargets.map(unit => ({
+          nodeId: unit.nodeId,
+          playerKey: unit.playerKey,
+          deckIndex: unit.deckIndex,
+          tokenId: unit.tokenId ?? null,
+        })),
+      },
+    };
+  };
+
   const concludeAbilityUsage = (placementsState, message) => {
     if (!abilityContext) return;
     const abilityMeta = abilityContext;
@@ -967,6 +1068,18 @@ const Board = () => {
     }
     if (piece.cardKey === 'manipulatrice') {
       const initialized = initializeManipulatorAbility(piece, deckCard);
+      if (!initialized) return;
+      setAbilityContext(initialized);
+      return;
+    }
+    if (piece.cardKey === 'garderoyal') {
+      const initialized = initializeRoyalGuardAbility(piece, deckCard);
+      if (!initialized) return;
+      setAbilityContext(initialized);
+      return;
+    }
+    if (piece.cardKey === 'lancegrappin') {
+      const initialized = initializeClawLauncherAbility(piece, deckCard);
       if (!initialized) return;
       setAbilityContext(initialized);
       return;
@@ -1117,6 +1230,292 @@ const Board = () => {
 
       // Fallback jika phase tidak dikenal
       setStatusMessage('Ability Manipulator dibatalkan.');
+      setAbilityContext(null);
+      return;
+    }
+    if (abilityContext.id === 'garderoyal') {
+      const activePiece = getAbilityPieceInstance(abilityContext);
+      if (!activePiece) {
+        setAbilityContext(null);
+        setStatusMessage('Selected unit is no longer available.');
+        return;
+      }
+
+      // Tahap 1: pindahkan Royal Guard ke petak adjacent Leader
+      if (abilityContext.phase === 'royal-select-adjacent') {
+        if (!abilityContext.highlightNodes?.includes(node.id)) {
+          setStatusMessage('Pilih salah satu petak yang disorot di sekitar Leader.');
+          return;
+        }
+
+        const firstDestId = node.id;
+        const intermediatePlacements = placements.map(p =>
+          (p.playerKey === activePiece.playerKey &&
+           p.deckIndex === activePiece.deckIndex &&
+           (activePiece.tokenId == null || p.tokenId === activePiece.tokenId))
+            ? { ...p, nodeId: firstDestId }
+            : p
+        );
+
+        // Cari langkah tambahan satu petak dari posisi baru
+        const stepOptions = getAdjacentNodeIds(firstDestId).filter(id =>
+          isNodeEmpty(id, intermediatePlacements, leadersPositions)
+        );
+
+        if (!stepOptions.length) {
+          // Tidak ada langkah tambahan, ability selesai di sini
+          setPlacements(intermediatePlacements);
+          setDecks(prev => ({
+            ...prev,
+            [activePiece.playerKey]: prev[activePiece.playerKey].map((card, idx) => {
+              if (idx !== activePiece.deckIndex || !card) return card;
+              if (card.isDual) return card;
+              return { ...card, boardNodeId: firstDestId };
+            }),
+          }));
+          concludeAbilityUsage(intermediatePlacements, 'Royal Guard bergerak di samping Leader.');
+          return;
+        }
+
+        setPlacements(intermediatePlacements);
+        setDecks(prev => ({
+          ...prev,
+          [activePiece.playerKey]: prev[activePiece.playerKey].map((card, idx) => {
+            if (idx !== activePiece.deckIndex || !card) return card;
+            if (card.isDual) return card;
+            return { ...card, boardNodeId: firstDestId };
+          }),
+        }));
+
+        setAbilityContext({
+          ...abilityContext,
+          originNodeId: firstDestId,
+          phase: 'royal-select-step',
+          highlightNodes: stepOptions,
+          data: {
+            ...abilityContext.data,
+            hasProgress: true,
+          },
+        });
+        setStatusMessage('Royal Guard boleh melangkah satu petak lagi.');
+        return;
+      }
+
+      // Tahap 2: pilih langkah tambahan satu petak dari posisi baru
+      if (abilityContext.phase === 'royal-select-step') {
+        if (!abilityContext.highlightNodes?.includes(node.id)) {
+          setStatusMessage('Pilih salah satu petak yang disorot untuk langkah tambahan.');
+          return;
+        }
+
+        const updatedPlacements = placements.map(p =>
+          (p.playerKey === activePiece.playerKey &&
+           p.deckIndex === activePiece.deckIndex &&
+           (activePiece.tokenId == null || p.tokenId === activePiece.tokenId))
+            ? { ...p, nodeId: node.id }
+            : p
+        );
+
+        setPlacements(updatedPlacements);
+        setDecks(prev => ({
+          ...prev,
+          [activePiece.playerKey]: prev[activePiece.playerKey].map((card, idx) => {
+            if (idx !== activePiece.deckIndex || !card) return card;
+            if (card.isDual) return card;
+            return { ...card, boardNodeId: node.id };
+          }),
+        }));
+
+        concludeAbilityUsage(updatedPlacements, 'Royal Guard menyelesaikan langkah tambahannya.');
+        return;
+      }
+
+      setStatusMessage('Ability Royal Guard dibatalkan.');
+      setAbilityContext(null);
+      return;
+    }
+
+    if (abilityContext.id === 'lancegrappin') {
+      const activePiece = getAbilityPieceInstance(abilityContext);
+      if (!activePiece) {
+        setAbilityContext(null);
+        setStatusMessage('Selected unit is no longer available.');
+        return;
+      }
+
+      const originNode = nodeMap.get(activePiece.nodeId);
+      if (!originNode) {
+        setAbilityContext(null);
+        setStatusMessage('Claw Launcher tidak berada di petak papan yang valid.');
+        return;
+      }
+
+      // Tahap 1: pilih karakter target di garis lurus
+      if (abilityContext.phase === 'claw-select-target') {
+        const targetPlacement = placements.find(p =>
+          p.nodeId === node.id && p.playerKey !== activePiece.playerKey
+        );
+        if (!targetPlacement) {
+          setStatusMessage('Pilih salah satu karakter yang disorot sebagai target.');
+          return;
+        }
+
+        const targetNode = nodeMap.get(targetPlacement.nodeId);
+        if (!targetNode) {
+          setAbilityContext(null);
+          setStatusMessage('Target tidak lagi berada di petak valid.');
+          return;
+        }
+
+        // Hitung semua petak kosong antara origin dan target (untuk opsi "bergerak ke depan")
+        const dx = targetNode.x - originNode.x;
+        const dy = targetNode.y - originNode.y;
+        const stepX = dx === 0 ? 0 : dx > 0 ? 1 : -1;
+        const stepY = dy === 0 ? 0 : dy > 0 ? 1 : -1;
+
+        const forwardPath = [];
+        let currentX = originNode.x + stepX;
+        let currentY = originNode.y + stepY;
+        while (Math.abs(currentX - targetNode.x) > FLOAT_TOLERANCE || Math.abs(currentY - targetNode.y) > FLOAT_TOLERANCE) {
+          const nodeOnPath = findNodeByCoordinates(currentX, currentY);
+          if (!nodeOnPath) break;
+          if (!isNodeEmpty(nodeOnPath.id)) {
+            // Ada penghalang yang muncul setelah inisialisasi -> batalkan
+            setStatusMessage('Jalur Claw Launcher kini terhalang. Ability dibatalkan.');
+            setAbilityContext(null);
+            return;
+          }
+          forwardPath.push(nodeOnPath.id);
+          currentX += stepX;
+          currentY += stepY;
+        }
+
+        // Hitung posisi adjacent ke origin untuk opsi "menarik" (drag sampai adjacent)
+        const adjacentToOrigin = getAdjacentNodeIds(originNode.id).filter(id => isNodeEmpty(id));
+
+        const nextHighlights = new Set();
+        forwardPath.forEach(id => nextHighlights.add(id));
+        adjacentToOrigin.forEach(id => nextHighlights.add(id));
+
+        if (!nextHighlights.size) {
+          setStatusMessage('Tidak ada petak yang valid untuk Claw Launcher.');
+          setAbilityContext(null);
+          return;
+        }
+
+        setAbilityContext({
+          ...abilityContext,
+          phase: 'claw-select-destination',
+          highlightNodes: Array.from(nextHighlights),
+          data: {
+            ...abilityContext.data,
+            hasProgress: true,
+            selectedTarget: {
+              nodeId: targetPlacement.nodeId,
+              playerKey: targetPlacement.playerKey,
+              deckIndex: targetPlacement.deckIndex,
+              tokenId: targetPlacement.tokenId ?? null,
+            },
+            originNodeId: originNode.id,
+            targetNodeId: targetNode.id,
+            forwardPath,
+          },
+        });
+        setStatusMessage('Pilih petak untuk Claw Launcher: maju ke depan atau tarik musuh ke arahmu.');
+        return;
+      }
+
+      // Tahap 2: pilih destinasi
+      if (abilityContext.phase === 'claw-select-destination') {
+        const data = abilityContext.data ?? {};
+        const selected = data.selectedTarget;
+        if (!selected) {
+          setAbilityContext(null);
+          setStatusMessage('Target tidak lagi tersedia.');
+          return;
+        }
+
+        if (!abilityContext.highlightNodes?.includes(node.id)) {
+          setStatusMessage('Pilih salah satu petak yang disorot.');
+          return;
+        }
+
+        const targetPlacement = placements.find(p =>
+          p.nodeId === selected.nodeId &&
+          p.playerKey === selected.playerKey &&
+          p.deckIndex === selected.deckIndex &&
+          (selected.tokenId == null || p.tokenId === selected.tokenId)
+        );
+        if (!targetPlacement) {
+          setAbilityContext(null);
+          setStatusMessage('Target sudah tidak ada.');
+          return;
+        }
+
+        // Tentukan apakah pilihan adalah maju ke depan (Claw Launcher bergerak) atau tarik (musuh digeser)
+        const isForward = data.forwardPath?.includes(node.id);
+
+        if (isForward) {
+          // Claw Launcher bergerak sampai petak yang dipilih di garis lurus
+          if (!isNodeEmpty(node.id)) {
+            setStatusMessage('Petak ini sudah terisi. Pilih petak lain.');
+            return;
+          }
+
+          const updatedPlacements = placements.map(p =>
+            (p.playerKey === activePiece.playerKey &&
+             p.deckIndex === activePiece.deckIndex &&
+             (activePiece.tokenId == null || p.tokenId === activePiece.tokenId))
+              ? { ...p, nodeId: node.id }
+              : p
+          );
+
+          setPlacements(updatedPlacements);
+          setDecks(prev => ({
+            ...prev,
+            [activePiece.playerKey]: prev[activePiece.playerKey].map((card, idx) => {
+              if (idx !== activePiece.deckIndex || !card) return card;
+              if (card.isDual) return card;
+              return { ...card, boardNodeId: node.id };
+            }),
+          }));
+
+          concludeAbilityUsage(updatedPlacements, 'Claw Launcher meluncur ke depan sepanjang garis.');
+          return;
+        }
+
+        // Mode tarik: musuh dipindah ke petak yang dipilih (harus adjacent ke origin)
+        const originId = data.originNodeId ?? originNode.id;
+        const adjToOrigin = getAdjacentNodeIds(originId);
+        if (!adjToOrigin.includes(node.id)) {
+          setStatusMessage('Untuk menarik musuh, pilih petak yang bersebelahan denganmu.');
+          return;
+        }
+
+        if (!isNodeEmpty(node.id)) {
+          setStatusMessage('Petak ini sudah terisi. Pilih petak lain.');
+          return;
+        }
+
+        const updatedPlacements = placements.map(p =>
+          p === targetPlacement ? { ...p, nodeId: node.id } : p
+        );
+
+        setPlacements(updatedPlacements);
+        setDecks(prev => ({
+          ...prev,
+          [targetPlacement.playerKey]: prev[targetPlacement.playerKey].map((card, idx) => {
+            if (idx !== targetPlacement.deckIndex || !card) return card;
+            if (card.isDual) return card;
+            return { ...card, boardNodeId: node.id };
+          }),
+        }));
+
+        concludeAbilityUsage(updatedPlacements, 'Claw Launcher menarik musuh hingga adjacent.');
+        return;
+      }
+
+      setStatusMessage('Ability Claw Launcher dibatalkan.');
       setAbilityContext(null);
       return;
     }
