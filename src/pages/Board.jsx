@@ -122,7 +122,7 @@ const BOARD_COMPATIBLE_KEYS = new Set([
   ...Object.keys(WHITE_CHARACTER_MAP),
   ...Object.keys(BLACK_CHARACTER_MAP),
 ]);
-const IMPLEMENTED_ACTIVE_ABILITIES = new Set(['acrobate', 'cavalier']);
+const IMPLEMENTED_ACTIVE_ABILITIES = new Set(['acrobate', 'cavalier', 'manipulatrice']);
 
 const getBoardImageForAlias = (aliasKey, playerKey) => {
   if (!aliasKey || !playerKey) return null;
@@ -772,6 +772,70 @@ const Board = () => {
     };
   };
 
+  const initializeManipulatorAbility = (piece, deckCard) => {
+    const originNode = nodeMap.get(piece.nodeId);
+    if (!originNode) return null;
+
+    const enemyKey = piece.playerKey === 'p1' ? 'p2' : 'p1';
+    const inLineEnemies = placements.filter(unit => {
+      if (unit.playerKey !== enemyKey) return false;
+      const targetNode = nodeMap.get(unit.nodeId);
+      if (!targetNode) return false;
+
+      const sameCol = Math.abs(targetNode.x - originNode.x) <= FLOAT_TOLERANCE;
+      const sameRow = Math.abs(targetNode.y - originNode.y) <= FLOAT_TOLERANCE;
+      if (!sameCol && !sameRow) return false;
+
+      const dx = targetNode.x - originNode.x;
+      const dy = targetNode.y - originNode.y;
+      if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) return false; // must be non-adjacent
+
+      const stepX = dx === 0 ? 0 : dx > 0 ? 1 : -1;
+      const stepY = dy === 0 ? 0 : dy > 0 ? 1 : -1;
+
+      let currentX = originNode.x + stepX;
+      let currentY = originNode.y + stepY;
+      while (Math.abs(currentX - targetNode.x) > FLOAT_TOLERANCE || Math.abs(currentY - targetNode.y) > FLOAT_TOLERANCE) {
+        const blocker = findNodeByCoordinates(currentX, currentY);
+        if (blocker) {
+          const occ = getNodeOccupant(blocker.id, leadersPositions, placements);
+          if (occ) return false;
+        }
+        currentX += stepX;
+        currentY += stepY;
+      }
+      return true;
+    });
+
+    if (!inLineEnemies.length) {
+      setStatusMessage('Tidak ada musuh non-adjacent yang terlihat dalam garis lurus.');
+      return null;
+    }
+
+    const highlightNodes = inLineEnemies.map(unit => unit.nodeId);
+    setStatusMessage('Pilih satu musuh yang disorot, lalu pilih petak di sekitarnya.');
+    return {
+      id: piece.cardKey,
+      abilityName: deckCard?.abilityName ?? piece.abilityName ?? getCardDisplayName(piece.portrait ?? ''),
+      playerKey: piece.playerKey,
+      playerLabel: playerKeyToLabel(piece.playerKey),
+      deckIndex: piece.deckIndex,
+      tokenId: piece.tokenId ?? null,
+      originNodeId: piece.nodeId,
+      phase: 'manipulator-select-target',
+      highlightNodes,
+      data: {
+        hasProgress: false,
+        targets: inLineEnemies.map(unit => ({
+          nodeId: unit.nodeId,
+          playerKey: unit.playerKey,
+          deckIndex: unit.deckIndex,
+          tokenId: unit.tokenId ?? null,
+        })),
+      },
+    };
+  };
+
   const concludeAbilityUsage = (placementsState, message) => {
     if (!abilityContext) return;
     const abilityMeta = abilityContext;
@@ -901,6 +965,12 @@ const Board = () => {
       setAbilityContext(initialized);
       return;
     }
+    if (piece.cardKey === 'manipulatrice') {
+      const initialized = initializeManipulatorAbility(piece, deckCard);
+      if (!initialized) return;
+      setAbilityContext(initialized);
+      return;
+    }
     setStatusMessage('Ability interactions are being prepared.');
   };
 
@@ -942,6 +1012,112 @@ const Board = () => {
     }
     if (abilityContext.id === 'cavalier') {
       executeRiderDash(node.id);
+      return;
+    }
+    if (abilityContext.id === 'manipulatrice') {
+      const activePiece = getAbilityPieceInstance(abilityContext);
+      if (!activePiece) {
+        setAbilityContext(null);
+        setStatusMessage('Selected unit is no longer available.');
+        return;
+      }
+
+      // Tahap 1: pilih target musuh yang se-garis
+      if (abilityContext.phase === 'manipulator-select-target') {
+        const targetPlacement = placements.find(p =>
+          p.nodeId === node.id && p.playerKey !== activePiece.playerKey
+        );
+        if (!targetPlacement) {
+          setStatusMessage('Pilih satu musuh yang disorot sebagai target.');
+          return;
+        }
+
+        const targetNode = nodes.find(n => n.id === targetPlacement.nodeId);
+        if (!targetNode) {
+          setAbilityContext(null);
+          return;
+        }
+
+        // Cari semua petak 1 langkah di sekitar target yang kosong
+        const candidateIds = getAdjacentNodeIds(targetNode.id);
+        const movableNodes = candidateIds.filter(id => isNodeEmpty(id));
+
+        if (!movableNodes.length) {
+          setStatusMessage('Sekitar target penuh, pilih musuh lain.');
+          return;
+        }
+
+        setAbilityContext({
+          ...abilityContext,
+          phase: 'manipulator-select-destination',
+          highlightNodes: movableNodes,
+          data: {
+            ...abilityContext.data,
+            hasProgress: true,
+            selectedTarget: {
+              nodeId: targetPlacement.nodeId,
+              playerKey: targetPlacement.playerKey,
+              deckIndex: targetPlacement.deckIndex,
+              tokenId: targetPlacement.tokenId ?? null,
+            },
+          },
+        });
+        setStatusMessage('Pilih petak kosong di sekitar target untuk memindahkannya.');
+        return;
+      }
+
+      // Tahap 2: pilih petak tujuan di sekitar target
+      if (abilityContext.phase === 'manipulator-select-destination') {
+        const selected = abilityContext.data?.selectedTarget;
+        if (!selected) {
+          setAbilityContext(null);
+          setStatusMessage('Target tidak lagi tersedia.');
+          return;
+        }
+
+        if (!abilityContext.highlightNodes?.includes(node.id)) {
+          setStatusMessage('Pilih salah satu petak yang disorot.');
+          return;
+        }
+
+        const targetPlacement = placements.find(p =>
+          p.nodeId === selected.nodeId &&
+          p.playerKey === selected.playerKey &&
+          p.deckIndex === selected.deckIndex &&
+          (selected.tokenId == null || p.tokenId === selected.tokenId)
+        );
+        if (!targetPlacement) {
+          setAbilityContext(null);
+          setStatusMessage('Musuh tersebut sudah tidak ada.');
+          return;
+        }
+
+        if (!isNodeEmpty(node.id)) {
+          setStatusMessage('Petak ini sudah terisi. Pilih petak lain.');
+          return;
+        }
+
+        const updatedPlacements = placements.map(p =>
+          p === targetPlacement ? { ...p, nodeId: node.id } : p
+        );
+
+        setPlacements(updatedPlacements);
+        setDecks(prev => ({
+          ...prev,
+          [targetPlacement.playerKey]: prev[targetPlacement.playerKey].map((card, idx) => {
+            if (idx !== targetPlacement.deckIndex || !card) return card;
+            if (card.isDual) return card;
+            return { ...card, boardNodeId: node.id };
+          }),
+        }));
+
+        concludeAbilityUsage(updatedPlacements, 'Manipulator memindahkan musuh satu petak.');
+        return;
+      }
+
+      // Fallback jika phase tidak dikenal
+      setStatusMessage('Ability Manipulator dibatalkan.');
+      setAbilityContext(null);
       return;
     }
 
