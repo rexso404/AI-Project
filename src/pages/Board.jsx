@@ -104,6 +104,7 @@ const Board = () => {
   const bothDecksFull = isPlayerDeckFull('p1') && isPlayerDeckFull('p2');
   const boardShiftClass = '-translate-x-48';
   const playerDeckShiftClass = bothDecksFull ? '-translate-x-12' : '';
+  const isPlayer1Turn = currentTurn === 'Player 1';
 
   // Helper Wrappers
   const hasLeaderMoved = (playerKey) => Boolean(movementTracker[playerKey]?.leader);
@@ -933,7 +934,7 @@ const Board = () => {
 
       {/* Center - Board */}
       <div className={`absolute inset-0 flex justify-center items-center pointer-events-none ${boardShiftClass}`}>
-        <div className="relative h-[90vh]">
+        <div className={`relative h-[90vh] transition-transform duration-700 ${isPlayer1Turn ? 'rotate-180' : ''}`}>
             <img 
               src={boardImg} 
               alt="Game Board" 
@@ -1011,7 +1012,7 @@ const Board = () => {
                         <img 
                           src={displayImage} 
                           alt="Leader" 
-                          className={`w-full h-full object-cover transition-opacity duration-200 ${opacityClass}`}
+                          className={`w-full h-full object-cover transition-all duration-200 ${opacityClass} ${isPlayer1Turn ? 'rotate-180' : ''}`}
                         />
                       )}
                       {abilityAvailable && placedPiece && (
