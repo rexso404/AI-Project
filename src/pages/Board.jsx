@@ -39,474 +39,10 @@ import {
   getRiderLandingOptions
 } from '../Logic/GameUtils';
 
-<<<<<<< HEAD
-// Leader Assets
-import whiteReine from '../assets/leader_blanc/Leaders_BGA_white_LeaderReine.png';
-import whiteRoi from '../assets/leader_blanc/Leaders_BGA_white_LeaderRoi.png';
-import blackReine from '../assets/leader_noir/Leaders_BGA_black_LeaderReine.png';
-import blackRoi from '../assets/leader_noir/Leaders_BGA_black_LeaderRoi.png';
 
-// Hand Assets
-import reinePortrait from '../assets/Q&K_Potrait/LEADERS-Reine.tif?url';
-import roiPortrait from '../assets/Q&K_Potrait/LEADERS-Roi.tif?url';
-
-// Character assets (white)
-import whiteAcrobate from '../assets/character_blanc/Leaders_BGA_white_Acrobate.png';
-import whiteArchere from '../assets/character_blanc/Leaders_BGA_white_Archere.png';
-import whiteAssassin from '../assets/character_blanc/Leaders_BGA_white_Assassin.png';
-import whiteCavalier from '../assets/character_blanc/Leaders_BGA_white_Cavalier.png';
-import whiteCogneur from '../assets/character_blanc/Leaders_BGA_white_Cogneur.png';
-import whiteGardeRoyal from '../assets/character_blanc/Leaders_BGA_white_GardeRoyal.png';
-import whiteGeolier from '../assets/character_blanc/Leaders_BGA_white_Geolier.png';
-import whiteIllusionniste from '../assets/character_blanc/Leaders_BGA_white_Illusionniste.png';
-import whiteLanceGrappin from '../assets/character_blanc/Leaders_BGA_white_LanceGrappin.png';
-import whiteManipulatrice from '../assets/character_blanc/Leaders_BGA_white_Manipulatrice.png';
-import whiteNemesis from '../assets/character_blanc/Leaders_BGA_white_Nemesis.png';
-import whiteOurson from '../assets/character_blanc/Leaders_BGA_white_Ourson.png';
-import whiteProtecteur from '../assets/character_blanc/Leaders_BGA_white_Protecteur.png';
-import whiteRodeuse from '../assets/character_blanc/Leaders_BGA_white_Rodeuse.png';
-import whiteTavernier from '../assets/character_blanc/Leaders_BGA_white_Tavernier.png';
-import whiteVieilOurs from '../assets/character_blanc/Leaders_BGA_white_VieilOurs.png';
-import whiteVizir from '../assets/character_blanc/Leaders_BGA_white_Vizir.png';
-
-// Character assets (black)
-import blackAcrobate from '../assets/character_noir/Leaders_BGA_black_Acrobate.png';
-import blackArchere from '../assets/character_noir/Leaders_BGA_black_Archere.png';
-import blackAssassin from '../assets/character_noir/Leaders_BGA_black_Assassin.png';
-import blackCavalier from '../assets/character_noir/Leaders_BGA_black_Cavalier.png';
-import blackCogneur from '../assets/character_noir/Leaders_BGA_black_Cogneur.png';
-import blackGardeRoyal from '../assets/character_noir/Leaders_BGA_black_GardeRoyal.png';
-import blackGeolier from '../assets/character_noir/Leaders_BGA_black_Geolier.png';
-import blackIllusionniste from '../assets/character_noir/Leaders_BGA_black_Illusionniste.png';
-import blackLanceGrappin from '../assets/character_noir/Leaders_BGA_black_LanceGrappin.png';
-import blackManipulatrice from '../assets/character_noir/Leaders_BGA_black_Manipulatrice.png';
-import blackNemesis from '../assets/character_noir/Leaders_BGA_black_Nemesis.png';
-import blackOurson from '../assets/character_noir/Leaders_BGA_black_Ourson.png';
-import blackProtecteur from '../assets/character_noir/Leaders_BGA_black_Protecteur.png';
-import blackRodeuse from '../assets/character_noir/Leaders_BGA_black_Rodeuse.png';
-import blackTavernier from '../assets/character_noir/Leaders_BGA_black_Tavernier.png';
-import blackVieilOurs from '../assets/character_noir/Leaders_BGA_black_VieilOurs.png';
-import blackVizir from '../assets/character_noir/Leaders_BGA_black_Vizir.png';
-
-const normalizeKey = (value = '') => value.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-const WHITE_CHARACTER_MAP = {
-  acrobate: whiteAcrobate,
-  archere: whiteArchere,
-  assassin: whiteAssassin,
-  cavalier: whiteCavalier,
-  cogneur: whiteCogneur,
-  garderoyal: whiteGardeRoyal,
-  geolier: whiteGeolier,
-  illusionniste: whiteIllusionniste,
-  lancegrappin: whiteLanceGrappin,
-  manipulatrice: whiteManipulatrice,
-  nemesis: whiteNemesis,
-  ourson: whiteOurson,
-  protecteur: whiteProtecteur,
-  rodeuse: whiteRodeuse,
-  tavernier: whiteTavernier,
-  vieilours: whiteVieilOurs,
-  vizir: whiteVizir,
-};
-
-const BLACK_CHARACTER_MAP = {
-  acrobate: blackAcrobate,
-  archere: blackArchere,
-  assassin: blackAssassin,
-  cavalier: blackCavalier,
-  cogneur: blackCogneur,
-  garderoyal: blackGardeRoyal,
-  geolier: blackGeolier,
-  illusionniste: blackIllusionniste,
-  lancegrappin: blackLanceGrappin,
-  manipulatrice: blackManipulatrice,
-  nemesis: blackNemesis,
-  ourson: blackOurson,
-  protecteur: blackProtecteur,
-  rodeuse: blackRodeuse,
-  tavernier: blackTavernier,
-  vieilours: blackVieilOurs,
-  vizir: blackVizir,
-};
-
-const BOARD_IMAGE_ALIAS_MAP = Object.entries({
-  ...WHITE_CHARACTER_MAP,
-  ...BLACK_CHARACTER_MAP,
-}).reduce((acc, [alias, asset]) => {
-  acc[asset] = alias;
-  return acc;
-}, {});
-
-const DUAL_CARD_KEYS = new Set(['ourson', 'vieilours']);
-const DUAL_TOKEN_SEQUENCE = ['hermit', 'cub'];
-const DUAL_TOKEN_ASSETS = {
-  p1: {
-    hermit: whiteVieilOurs,
-    cub: whiteOurson,
-  },
-  p2: {
-    hermit: blackVieilOurs,
-    cub: blackOurson,
-  },
-};
-const FLOAT_TOLERANCE = 0.001;
-const BOARD_COMPATIBLE_KEYS = new Set([
-  ...Object.keys(WHITE_CHARACTER_MAP),
-  ...Object.keys(BLACK_CHARACTER_MAP),
-]);
-const IMPLEMENTED_ACTIVE_ABILITIES = new Set([
-  'acrobate',
-  'cavalier',
-  'manipulatrice',
-  'garderoyal',
-  'lancegrappin',
-  'tavernier',
-  'cogneur',
-  'illusionniste',
-  'rodeuse',
-]);
-
-const getBoardImageForAlias = (aliasKey, playerKey) => {
-  if (!aliasKey || !playerKey) return null;
-  const map = playerKey === 'p1' ? WHITE_CHARACTER_MAP : BLACK_CHARACTER_MAP;
-  return map[aliasKey] ?? null;
-};
-
-const extractPortraitKey = (imageUrl = '') => {
-  const fileName = imageUrl.split('/').pop()?.split('?')[0] ?? '';
-  let base = fileName.replace(/^LEADERS[-_]/i, '');
-  base = base.replace(/\.(tif|tiff|png)$/i, '');
-  base = base.replace(/[-_]?LQ$/i, '');
-  return normalizeKey(base);
-};
-
-const MAX_DECK_SIZE = 4;
-const DECK_INDEXES = Array.from({ length: MAX_DECK_SIZE }, (_, idx) => idx);
-const STORAGE_KEY = 'leaders-game-state';
-
-const LEADER_DISPLAY_NAMES = {
-  reine: 'Reine',
-  roi: 'Roi',
-};
-
-const CHARACTER_ALIAS_MAP = {
-  acrobate: 'Acrobat',
-  archere: 'Archer',
-  assassin: 'Assassin',
-  cavalier: 'Rider',
-  cogneur: 'Bruiser',
-  garderoyal: 'Royal Guard',
-  geolier: 'Jailer',
-  illusionniste: 'Illusionist',
-  lancegrappin: 'Claw Launcher',
-  manipulatrice: 'Manipulator',
-  nemesis: 'Nemesis',
-  ourson: 'Hermit and Cub',
-  vieilours: 'Hermit and Cub',
-  protecteur: 'Protector',
-  rodeuse: 'Wanderer',
-  tavernier: 'Brewmaster',
-  vizir: 'Vizier',
-};
-
-const CHARACTER_DATA_MAP = gameData.characters.reduce((acc, character) => {
-  const key = normalizeKey(character.name);
-  if (key) acc[key] = character;
-  return acc;
-}, {});
-
-const getCardDataByAlias = (aliasKey) => {
-  if (!aliasKey) return null;
-  const canonicalName = CHARACTER_ALIAS_MAP[aliasKey] ?? aliasKey;
-  return CHARACTER_DATA_MAP[normalizeKey(canonicalName)] ?? null;
-};
-
-const getCardMetaFromPortrait = (portraitUrl) => {
-  if (!portraitUrl) return { cardKey: '', abilityType: null, abilityName: '' };
-  const cardKey = extractPortraitKey(portraitUrl);
-  const cardData = getCardDataByAlias(cardKey);
-  return {
-    cardKey,
-    abilityType: cardData?.type ?? null,
-    abilityName: cardData?.name ?? '',
-  };
-};
-
-const getCardMetaFromAlias = (aliasKey) => {
-  if (!aliasKey) return { abilityType: null, abilityName: '' };
-  const cardData = getCardDataByAlias(aliasKey);
-  return {
-    abilityType: cardData?.type ?? null,
-    abilityName: cardData?.name ?? '',
-  };
-};
-
-const isDualCharacter = (cardKey) => DUAL_CARD_KEYS.has(cardKey);
-
-const hydrateDecks = (rawDecks = buildEmptyDecks()) => {
-  const hydrated = { p1: [], p2: [] };
-  ['p1', 'p2'].forEach((playerKey) => {
-    hydrated[playerKey] = DECK_INDEXES.map((idx) => {
-      const card = rawDecks?.[playerKey]?.[idx];
-      if (!card) return null;
-      const portrait = card.portrait ?? card.boardImage ?? '';
-      const meta = card.cardKey ? { cardKey: card.cardKey } : getCardMetaFromPortrait(portrait);
-      const aliasKey = meta.cardKey || card.cardKey || extractPortraitKey(portrait);
-      const resolvedBoardImage = card.boardImage ?? getBoardImageForAlias(aliasKey, playerKey) ?? portrait;
-      const aliasMeta = getCardMetaFromAlias(aliasKey);
-      return {
-        portrait,
-        boardImage: resolvedBoardImage,
-        boardNodeId: card.boardNodeId ?? null,
-        cardKey: aliasKey,
-        abilityType: card.abilityType ?? aliasMeta.abilityType,
-        abilityName: card.abilityName ?? aliasMeta.abilityName,
-        isDual: isDualCharacter(aliasKey),
-        placedTokens: card.placedTokens ?? [],
-      };
-    });
-  });
-  return hydrated;
-};
-
-const getAliasFromBoardImage = (imageSrc) => BOARD_IMAGE_ALIAS_MAP[imageSrc] ?? null;
-
-const sanitizePlacements = (rawPlacements = [], deckSnapshot = buildEmptyDecks()) => rawPlacements.map((piece) => {
-  if (!piece) return piece;
-  const deckCard = deckSnapshot?.[piece.playerKey]?.[piece.deckIndex];
-  const inferredAlias = piece.cardKey
-    || deckCard?.cardKey
-    || getAliasFromBoardImage(piece.image)
-    || extractPortraitKey(piece.portrait ?? '');
-  const aliasMeta = getCardMetaFromAlias(inferredAlias);
-  return {
-    ...piece,
-    portrait: piece.portrait ?? deckCard?.portrait ?? null,
-    cardKey: inferredAlias,
-    abilityType: piece.abilityType ?? deckCard?.abilityType ?? aliasMeta.abilityType,
-    abilityName: piece.abilityName ?? deckCard?.abilityName ?? aliasMeta.abilityName,
-    tokenId: piece.tokenId ?? null,
-  };
-});
-
-const buildPlacementRecord = (playerKey, deckIndex, nodeId, decksSnapshot, tokenId = null) => {
-  const deckCard = decksSnapshot?.[playerKey]?.[deckIndex];
-  if (!deckCard) return null;
-  const aliasKey = deckCard.cardKey ?? extractPortraitKey(deckCard.portrait ?? '');
-  const aliasMeta = getCardMetaFromAlias(aliasKey);
-  const specializedImage = tokenId && DUAL_TOKEN_ASSETS[playerKey]?.[tokenId]
-    ? DUAL_TOKEN_ASSETS[playerKey][tokenId]
-    : null;
-  return {
-    nodeId,
-    playerKey,
-    deckIndex,
-    image: specializedImage ?? deckCard.boardImage ?? deckCard.portrait,
-    portrait: deckCard.portrait ?? null,
-    cardKey: aliasKey,
-    abilityType: deckCard.abilityType ?? aliasMeta.abilityType,
-    abilityName: deckCard.abilityName ?? aliasMeta.abilityName,
-    tokenId: tokenId ?? null,
-  };
-};
-
-const buildEmptyDecks = () => ({
-  p1: Array(MAX_DECK_SIZE).fill(null),
-  p2: Array(MAX_DECK_SIZE).fill(null),
-});
-
-const createGameLeaders = () => {
-  const buildLeader = (color, isReine) => ({
-    boardImage: color === 'white'
-      ? (isReine ? whiteReine : whiteRoi)
-      : (isReine ? blackReine : blackRoi),
-    handImage: isReine ? reinePortrait : roiPortrait,
-    isWhite: color === 'white',
-    role: isReine ? 'reine' : 'roi',
-  });
-
-  const isReineP1 = Math.random() > 0.5;
-  const leaders = {
-    p1: buildLeader('white', isReineP1),
-    p2: buildLeader('black', !isReineP1),
-  };
-  const firstPlayerKey = leaders.p1.role === 'roi' ? 'p1' : 'p2';
-
-  return { leaders, firstPlayerKey };
-};
-
-const playerLabelToKey = (label) => (label === 'Player 1' ? 'p1' : 'p2');
-const playerKeyToLabel = (key) => (key === 'p1' ? 'Player 1' : 'Player 2');
-
-const getCharacterInfo = (imageUrl) => {
-  if (!imageUrl) return null;
-  const assetKey = extractPortraitKey(imageUrl);
-  if (!assetKey) return null;
-  const aliasName = CHARACTER_ALIAS_MAP[assetKey];
-  if (!aliasName) return null;
-  return CHARACTER_DATA_MAP[normalizeKey(aliasName)] ?? null;
-};
-
-const getCardDisplayName = (imageUrl) => {
-  if (!imageUrl) return '';
-  const assetKey = extractPortraitKey(imageUrl);
-  if (!assetKey) return '';
-  const info = getCharacterInfo(imageUrl);
-  if (info?.name) return info.name;
-  return LEADER_DISPLAY_NAMES[assetKey] ?? '';
-};
-
-const getCardAbility = (imageUrl) => {
-  const info = getCharacterInfo(imageUrl);
-  return info?.ability ?? '';
-};
-
-const createInitialLeaderPositions = () => ({ p1: 15, p2: 21 });
-
-const getSavedGameState = () => {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch (error) {
-    console.warn('Failed to parse saved game state', error);
-    return null;
-  }
-};
-
-const hasBoardAssetForCard = (imageUrl) => BOARD_COMPATIBLE_KEYS.has(extractPortraitKey(imageUrl));
-
-const getBoardAssetForPlayer = (imageUrl, playerKey) => {
-  const key = extractPortraitKey(imageUrl);
-  const map = playerKey === 'p1' ? WHITE_CHARACTER_MAP : BLACK_CHARACTER_MAP;
-  return map[key] ?? null;
-};
-
-const drawPlayableCharacter = (excludeList = []) => {
-  const banned = [];
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const candidate = getUniqueRandomCharacter([...excludeList.filter(Boolean), ...banned]);
-    if (!candidate) break;
-    if (hasBoardAssetForCard(candidate)) {
-      return candidate;
-    }
-    banned.push(candidate);
-  }
-  return null;
-};
-
-const drawLeaderReplacement = (currentOptions = [], usedCards = []) => {
-  const activeOptions = currentOptions.filter(Boolean);
-  const exclusion = Array.from(new Set([...activeOptions, ...usedCards])).filter(Boolean);
-  const card = drawPlayableCharacter(exclusion);
-  return { card, exhausted: !card };
-};
-
-const generateInitialLeaders = () => {
-  const picks = [];
-  while (picks.length < 3) {
-    const next = drawPlayableCharacter(picks);
-    if (!next) break;
-    picks.push(next);
-  }
-  while (picks.length < 3) {
-    picks.push(null);
-  }
-  return picks;
-};
-
-const createMovementTracker = () => ({
-  p1: { leader: false, units: [] },
-  p2: { leader: false, units: [] },
-});
-
-const CardSlot = ({ isDeck, isEmpty, image, className = "", onError, bgColor = "bg-[#1a1a1a]", borderColor = "border-white" }) => {
-  const isTiff = image && (image.toLowerCase().includes('.tif') || image.toLowerCase().includes('.tiff'));
-
-  return (
-    <div className={`w-28 h-40 ${bgColor} rounded-lg flex items-center justify-center shadow-lg overflow-hidden border-2 ${borderColor} ${className}`}>
-      {isDeck ? (
-        <img src={blankCardImg} alt="Deck" className="w-full h-full object-cover" />
-      ) : image ? (
-        isTiff ? (
-          <TiffImage src={image} alt="Card" className="w-full h-full object-cover" onError={onError} />
-        ) : (
-          <img src={image} alt="Card" className="w-full h-full object-cover" />
-        )
-      ) : isEmpty ? null : (
-        <span className="text-gray-600 text-4xl font-serif">?</span>
-      )}
-    </div>
-  );
-};
-
-const RecruitOptionCard = ({ image, name, ability, onClick, disabled, onError }) => {
-  const isTiff = image && (image.toLowerCase().includes('.tif') || image.toLowerCase().includes('.tiff'));
-  const title = name || 'Unknown Champion';
-  const abilityText = ability || 'Ability info unavailable.';
-
-  return (
-    <div className="relative group">
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={disabled ? undefined : onClick}
-        className={`w-40 h-64 rounded-[30px] border border-white/20 bg-gradient-to-b from-[#1f1f24]/95 via-[#131316]/95 to-[#07070a]/95 backdrop-blur-sm shadow-[0_22px_35px_rgba(0,0,0,0.6)] p-3.5 flex flex-col gap-3 transition-transform ${disabled ? 'opacity-35 cursor-not-allowed' : 'cursor-pointer hover:-translate-y-1.5'}`}
-      >
-        <div className="flex-1 rounded-2xl overflow-hidden bg-black/40 border border-white/10">
-          {image ? (
-            isTiff ? (
-              <TiffImage src={image} alt={title} className="w-full h-full object-cover" onError={onError} />
-            ) : (
-              <img src={image} alt={title} className="w-full h-full object-cover" onError={onError} />
-            )
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-white/40 text-2xl font-serif">?</div>
-          )}
-        </div>
-        <div className="space-y-1 text-left">
-          <p className="text-white font-semibold tracking-wide text-sm leading-tight overflow-hidden text-ellipsis whitespace-nowrap">{title}</p>
-          <p className="text-[11px] leading-snug text-white/80 max-h-[3.6em] overflow-hidden">{abilityText}</p>
-        </div>
-      </button>
-      <AbilityTooltip text={abilityText} />
-    </div>
-  );
-};
-
-const AbilityTooltip = ({ text, placement = 'right' }) => {
-  if (!text) return null;
-
-  if (placement === 'top') {
-    return (
-      <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 -mb-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-        <div className="relative bg-[#fffdf6]/95 text-slate-900 text-[12px] leading-relaxed px-5 py-3 rounded-2xl shadow-[0_12px_25px_rgba(0,0,0,0.35)] border border-[#f0c674] w-72 text-left">
-          <p className="whitespace-normal break-words">
-            {text}
-          </p>
-          <span aria-hidden="true" className="absolute left-1/2 -bottom-2 -translate-x-1/2 w-3 h-3 bg-[#fffdf6]/95 border-r border-b border-[#f0c674] rotate-45"></span>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-4 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-      <div className="relative bg-[#fffdf6]/95 text-slate-900 text-[12px] leading-relaxed px-5 py-3 rounded-2xl shadow-[0_12px_25px_rgba(0,0,0,0.35)] border border-[#f0c674] w-72 text-left">
-        <p className="whitespace-normal break-words">
-          {text}
-        </p>
-        <span aria-hidden="true" className="absolute -left-2 top-1/2 -translate-y-1/2 w-3 h-3 bg-[#fffdf6]/95 border-l border-t border-[#f0c674] rotate-45"></span>
-      </div>
-    </div>
-  );
-};
-=======
 import CardSlot from '../components/CardSlot.jsx';
 import RecruitOptionCard from '../components/RecruitOptionCard.jsx';
 import AbilityTooltip from '../components/AbilityTooltip.jsx';
->>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
 
 const Board = () => {
   const nodes = useMemo(() => getBoardNodes(), []);
@@ -764,7 +300,7 @@ const Board = () => {
     };
   };
 
-<<<<<<< HEAD
+
   const initializeManipulatorAbility = (piece, deckCard) => {
     const originNode = nodeMap.get(piece.nodeId);
     if (!originNode) return null;
@@ -1100,8 +636,6 @@ const Board = () => {
     };
   };
 
-=======
->>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
   const concludeAbilityUsage = (placementsState, message) => {
     if (!abilityContext) return;
     const abilityMeta = abilityContext;
@@ -1231,7 +765,7 @@ const Board = () => {
       setAbilityContext(initialized);
       return;
     }
-<<<<<<< HEAD
+
     if (piece.cardKey === 'manipulatrice') {
       const initialized = initializeManipulatorAbility(piece, deckCard);
       if (!initialized) return;
@@ -1274,8 +808,6 @@ const Board = () => {
       setAbilityContext(initialized);
       return;
     }
-=======
->>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
     setStatusMessage('Ability interactions are being prepared.');
   };
 
@@ -1613,6 +1145,64 @@ const Board = () => {
     return false;
   };
 
+  const moveNemesisIfNeeded = (movedLeaderKey, placementsState, leaderPositionsState) => {
+    const enemyKey = movedLeaderKey === 'p1' ? 'p2' : 'p1';
+    if (playerKeyToLabel(enemyKey) !== currentTurn) return placementsState;
+
+    const nemesisPiece = placementsState.find(p => p.playerKey === enemyKey && p.cardKey === 'nemesis');
+    if (!nemesisPiece) return placementsState;
+
+    const originNode = nodes.find(n => n.id === nemesisPiece.nodeId);
+    if (!originNode) return placementsState;
+
+    const opponentLeaderNodeId = leaderPositionsState[movedLeaderKey];
+    const opponentLeaderNode = nodes.find(n => n.id === opponentLeaderNodeId);
+    if (!opponentLeaderNode) return placementsState;
+
+    const dirX = opponentLeaderNode.x - originNode.x;
+    const dirY = opponentLeaderNode.y - originNode.y;
+    if (Math.abs(dirX) <= FLOAT_TOLERANCE && Math.abs(dirY) <= FLOAT_TOLERANCE) {
+      return placementsState;
+    }
+
+    const normX = dirX === 0 ? 0 : dirX > 0 ? 1 : -1;
+    const normY = dirY === 0 ? 0 : dirY > 0 ? 1 : -1;
+
+    const step1 = findNodeByCoordinates(originNode.x + normX, originNode.y + normY);
+    const step2 = step1 ? findNodeByCoordinates(step1.x + normX, step1.y + normY) : null;
+
+    const canStep = (node) => node && isNodeEmpty(node.id, placementsState, leaderPositionsState);
+    let targetNodeId = null;
+
+    if (canStep(step1) && canStep(step2)) {
+      targetNodeId = step2.id;
+    } else if (canStep(step1)) {
+      targetNodeId = step1.id;
+    } else {
+      return placementsState;
+    }
+
+    const updatedPlacements = placementsState.map(p =>
+      (p.playerKey === nemesisPiece.playerKey &&
+       p.deckIndex === nemesisPiece.deckIndex &&
+       (nemesisPiece.tokenId == null || p.tokenId === nemesisPiece.tokenId))
+        ? { ...p, nodeId: targetNodeId }
+        : p
+    );
+
+    setDecks(prev => ({
+      ...prev,
+      [nemesisPiece.playerKey]: prev[nemesisPiece.playerKey].map((card, idx) => {
+        if (idx !== nemesisPiece.deckIndex || !card) return card;
+        if (card.isDual) return card;
+        return { ...card, boardNodeId: targetNodeId };
+      }),
+    }));
+
+    setStatusMessage('Nemesis bereaksi setelah Leader musuh bergerak.');
+    return updatedPlacements;
+  };
+
   const handleNodeClick = (node, image) => {
     if (isGameOver) return;
     if (abilityContext) {
@@ -1690,9 +1280,12 @@ const Board = () => {
         setSelectedLeader(null);
         setSelectedNode(null);
         markLeaderMoved(leaderKey);
-        if (finalizeActionOutcome(placements, nextPositions)) {
+        const nemesisUpdatedPlacements = moveNemesisIfNeeded(leaderKey, placements, nextPositions);
+        if (finalizeActionOutcome(nemesisUpdatedPlacements, nextPositions)) {
+          setPlacements(nemesisUpdatedPlacements);
           return;
         }
+        setPlacements(nemesisUpdatedPlacements);
       }
       return;
     }
@@ -1743,41 +1336,7 @@ const Board = () => {
       return;
     }
 
-<<<<<<< HEAD
-          // Track whether there is an adjacent Assassin and whether there are other adjacent allies
-          let hasAssassinAdjacent = false;
-          let otherAlliesAdjacent = 0;
 
-          adjacentIds.forEach(id => {
-            const occupant = getNodeOccupant(id, leaderPositionsState, placementsState);
-            if (!occupant) {
-              allOccupied = false;
-            } else if (occupant.playerKey === enemyKey && occupant.type !== 'leader') {
-              enemyCount += 1;
-
-              const isAssassin = occupant.cardKey === 'assassin';
-              if (isAssassin) {
-                hasAssassinAdjacent = true;
-              } else {
-                otherAlliesAdjacent += 1;
-              }
-            }
-          });
-
-          // Base capture rule: two or more adjacent enemies
-          let captured = enemyCount >= 2;
-
-          // Assassin rule: can capture when adjacent alone (no second ally)
-          if (!captured && hasAssassinAdjacent && otherAlliesAdjacent === 0) {
-            captured = true;
-          }
-
-          return {
-            captured,
-            surrounded: allOccupied,
-          };
-        };
-=======
     const card = leaders[index];
     if (!card) return; // no card to pick
 
@@ -1789,7 +1348,6 @@ const Board = () => {
       toggleTurn();
       return;
     }
->>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
 
     const boardImage = getBoardAssetForPlayer(card, playerKey) ?? card;
     const cardKey = extractPortraitKey(card);
@@ -1843,86 +1401,7 @@ const Board = () => {
       forced: true,
       pendingTokens: isDual ? [...DUAL_TOKEN_SEQUENCE] : null,
     });
-
-<<<<<<< HEAD
-        const moveNemesisIfNeeded = (movedLeaderKey, placementsState, leaderPositionsState) => {
-          const enemyKey = movedLeaderKey === 'p1' ? 'p2' : 'p1';
-          // Nemesis hanya boleh bereaksi ketika pemilik Nemesis adalah currentTurn
-          const nemesisOwnerLabel = playerKeyToLabel(enemyKey);
-          if (nemesisOwnerLabel !== currentTurn) return placementsState;
-
-          const nemesisPiece = placementsState.find(p => p.playerKey === enemyKey && p.cardKey === 'nemesis');
-          if (!nemesisPiece) return placementsState;
-
-          const originNode = nodes.find(n => n.id === nemesisPiece.nodeId);
-          if (!originNode) return placementsState;
-
-          // Leader musuh yang baru saja bergerak (opponent of Nemesis owner)
-          const opponentLeaderKey = movedLeaderKey;
-          const opponentLeaderNodeId = leaderPositionsState[opponentLeaderKey];
-          const opponentLeaderNode = nodes.find(n => n.id === opponentLeaderNodeId);
-          if (!opponentLeaderNode) return placementsState;
-
-          const dirX = opponentLeaderNode.x - originNode.x;
-          const dirY = opponentLeaderNode.y - originNode.y;
-          if (Math.abs(dirX) <= FLOAT_TOLERANCE && Math.abs(dirY) <= FLOAT_TOLERANCE) {
-            // Sudah di node yang sama, tidak bergerak
-            return placementsState;
-          }
-
-          const normX = dirX === 0 ? 0 : dirX > 0 ? 1 : -1;
-          const normY = dirY === 0 ? 0 : dirY > 0 ? 1 : -1;
-
-          const step1 = findNodeByCoordinates(originNode.x + normX, originNode.y + normY);
-          const step2 = step1 ? findNodeByCoordinates(step1.x + normX, step1.y + normY) : null;
-
-          const canStep = (node) => node && isNodeEmpty(node.id, placementsState, leaderPositionsState);
-
-          let targetNodeId = null;
-
-          if (canStep(step1) && canStep(step2)) {
-            // Wajib 2 kotak jika keduanya kosong
-            targetNodeId = step2.id;
-          } else if (canStep(step1)) {
-            // Hanya 1 kotak jika langkah kedua terhalang
-            targetNodeId = step1.id;
-          } else {
-            // Tidak bisa bergerak
-            return placementsState;
-          }
-
-          const updatedPlacements = placementsState.map(p =>
-            (p.playerKey === nemesisPiece.playerKey &&
-             p.deckIndex === nemesisPiece.deckIndex &&
-             (nemesisPiece.tokenId == null || p.tokenId === nemesisPiece.tokenId))
-              ? { ...p, nodeId: targetNodeId }
-              : p
-          );
-
-          setDecks(prev => ({
-            ...prev,
-            [nemesisPiece.playerKey]: prev[nemesisPiece.playerKey].map((card, idx) => {
-              if (idx !== nemesisPiece.deckIndex || !card) return card;
-              if (card.isDual) return card;
-              return { ...card, boardNodeId: targetNodeId };
-            }),
-          }));
-
-          setStatusMessage('Nemesis bereaksi setelah Leader musuh bergerak.');
-          return updatedPlacements;
-        };
-
-        const handleNodeClick = (node, image) => {
-          if (isGameOver) return;
-          if (abilityContext) {
-            handleAbilityNodeInteraction(node);
-            return;
-          }
-          const nodeId = node.id;
-=======
-    setCanPickFor(null);
   };
->>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
 
   const attemptPlacement = (node) => {
     if (isGameOver) return;
@@ -1985,29 +1464,8 @@ const Board = () => {
     if (!card) return;
     const playerLabel = playerKeyToLabel(playerKey);
     if (currentTurn !== playerLabel) return;
-
-<<<<<<< HEAD
-              setLeadersPositions(nextPositions);
-              setStatusMessage('');
-              setSelectedLeader(null);
-              setSelectedNode(null);
-              markLeaderMoved(leaderKey);
-
-              // Pindahkan Nemesis milik lawan jika perlu (Leader yang bergerak adalah lawan Nemesis)
-              const nemesisUpdatedPlacements = moveNemesisIfNeeded(leaderKey, placements, nextPositions);
-              if (finalizeActionOutcome(nemesisUpdatedPlacements, nextPositions)) {
-                setPlacements(nemesisUpdatedPlacements);
-                return;
-              }
-
-              setPlacements(nemesisUpdatedPlacements);
-            }
-            return;
-          }
-=======
     const placedUnits = placements.filter(p => p.playerKey === playerKey && p.deckIndex === cardIndex);
     const isDual = Boolean(card?.isDual);
->>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
 
     // If the card is already deployed (has a boardNodeId), allow selecting its on-board unit
     if ((card.boardNodeId && !isDual) || (isDual && placedUnits.length > 0)) {

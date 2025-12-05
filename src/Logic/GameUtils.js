@@ -320,6 +320,8 @@ export const evaluateLeaderState = (playerKey, placementsState, leaderPositionsS
   const enemyKey = playerKey === 'p1' ? 'p2' : 'p1';
   let enemyCount = 0;
   let allOccupied = adjacentIds.length > 0;
+  let hasAssassinAdjacent = false;
+  let otherAlliesAdjacent = 0;
 
   adjacentIds.forEach(id => {
     const occupant = getNodeOccupant(id, leaderPositionsState, placementsState);
@@ -327,11 +329,21 @@ export const evaluateLeaderState = (playerKey, placementsState, leaderPositionsS
       allOccupied = false;
     } else if (occupant.playerKey === enemyKey && occupant.type !== 'leader') {
       enemyCount += 1;
+      if (occupant.cardKey === 'assassin') {
+        hasAssassinAdjacent = true;
+      } else {
+        otherAlliesAdjacent += 1;
+      }
     }
   });
 
+  let captured = enemyCount >= 2;
+  if (!captured && hasAssassinAdjacent && otherAlliesAdjacent === 0) {
+    captured = true;
+  }
+
   return {
-    captured: enemyCount >= 2,
+    captured,
     surrounded: allOccupied,
   };
 };
