@@ -1,12 +1,45 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import gameData from '../../data.json';
-import boardImg from '../assets/board/Leaders_Board.png';
-import bgImg from '../assets/background/bg.jpg';
-import blankCardImg from '../assets/Blank/blank.png';
 import { getBoardNodes } from '../Logic/Board';
-import { getUniqueRandomCharacter } from '../Logic/CharacterRandomizer';
-import TiffImage from '../components/TiffImage.jsx';
+import {
+  boardImg,
+  bgImg,
+  DECK_INDEXES,
+  STORAGE_KEY,
+  DUAL_TOKEN_SEQUENCE,
+  FLOAT_TOLERANCE,
+  IMPLEMENTED_ACTIVE_ABILITIES
+} from '../Logic/GameConstants';
+import {
+  hydrateDecks,
+  buildEmptyDecks,
+  createGameLeaders,
+  playerKeyToLabel,
+  playerLabelToKey,
+  createInitialLeaderPositions,
+  getSavedGameState,
+  generateInitialLeaders,
+  createMovementTracker,
+  sanitizePlacements,
+  drawLeaderReplacement,
+  getCardDisplayName,
+  getCardAbility,
+  getBoardAssetForPlayer,
+  extractPortraitKey,
+  getCardMetaFromAlias,
+  isDualCharacter,
+  buildPlacementRecord,
+  getAdjacentNodeIds,
+  getNodeOccupant,
+  isNodeEmpty,
+  findNodeByCoordinates,
+  isWithinMoveRange,
+  wouldTrapSelf,
+  determineGameOutcome,
+  getAcrobatLandingOptions,
+  getRiderLandingOptions
+} from '../Logic/GameUtils';
 
+<<<<<<< HEAD
 // Leader Assets
 import whiteReine from '../assets/leader_blanc/Leaders_BGA_white_LeaderReine.png';
 import whiteRoi from '../assets/leader_blanc/Leaders_BGA_white_LeaderRoi.png';
@@ -469,9 +502,16 @@ const AbilityTooltip = ({ text, placement = 'right' }) => {
     </div>
   );
 };
+=======
+import CardSlot from '../components/CardSlot.jsx';
+import RecruitOptionCard from '../components/RecruitOptionCard.jsx';
+import AbilityTooltip from '../components/AbilityTooltip.jsx';
+>>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
 
 const Board = () => {
   const nodes = useMemo(() => getBoardNodes(), []);
+  
+  // Derived node maps for quick lookup
   const nodeMap = useMemo(() => {
     const map = new Map();
     nodes.forEach(node => {
@@ -479,25 +519,7 @@ const Board = () => {
     });
     return map;
   }, [nodes]);
-  const columnNodeMap = useMemo(() => {
-    const map = new Map();
-    nodes.forEach(node => {
-      if (!map.has(node.col)) map.set(node.col, []);
-      map.get(node.col).push(node);
-    });
-    map.forEach(list => list.sort((a, b) => a.row - b.row));
-    return map;
-  }, [nodes]);
-  const rowNodeMap = useMemo(() => {
-    const map = new Map();
-    nodes.forEach(node => {
-      const key = node.y.toFixed(3);
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(node);
-    });
-    map.forEach(list => list.sort((a, b) => a.x - b.x));
-    return map;
-  }, [nodes]);
+
   const columnMaxRow = useMemo(() => {
     const map = {};
     nodes.forEach((node) => {
@@ -505,7 +527,9 @@ const Board = () => {
     });
     return map;
   }, [nodes]);
+
   const savedGame = useMemo(() => getSavedGameState(), []);
+  
   const initialGameLeaderData = useMemo(() => {
     if (savedGame?.gameLeaders) {
       const roiEntry = Object.entries(savedGame.gameLeaders).find(([, leader]) => leader?.role === 'roi');
@@ -516,45 +540,52 @@ const Board = () => {
     }
     return createGameLeaders();
   }, [savedGame]);
+
   const initialDeckState = useMemo(
     () => hydrateDecks(savedGame?.decks ?? buildEmptyDecks()),
     [savedGame]
   );
+
+  // State Declarations
   const [leaders, setLeaders] = useState(() => savedGame?.leaders ?? generateInitialLeaders());
   const [selectedNode, setSelectedNode] = useState(null);
   const [currentTurn, setCurrentTurn] = useState(() => savedGame?.currentTurn ?? playerKeyToLabel(initialGameLeaderData.firstPlayerKey));
-  // Positions of leaders on the board (node ids)
   const [leadersPositions, setLeadersPositions] = useState(() => savedGame?.leadersPositions ?? createInitialLeaderPositions());
-  // Selected leader info when a player selects their leader to move
   const [selectedLeader, setSelectedLeader] = useState(null);
-  // After moving, the player may pick one of the 3 left-side characters
-  const [canPickFor, setCanPickFor] = useState(() => savedGame?.canPickFor ?? null); // 'Player 1' | 'Player 2' | null
-  // Deck/hand of picked characters waiting to be placed on the board
+  const [canPickFor, setCanPickFor] = useState(() => savedGame?.canPickFor ?? null);
   const [decks, setDecks] = useState(initialDeckState);
-  // Cards already placed on the board (besides leaders)
   const [placements, setPlacements] = useState(() => sanitizePlacements(savedGame?.placements ?? [], initialDeckState));
   const [retiredCards, setRetiredCards] = useState(() => savedGame?.retiredCards ?? []);
-  // Currently selected summon card to place (may be forced right after pick)
   const [selectedSummon, setSelectedSummon] = useState(() => savedGame?.selectedSummon ?? null);
   const [movementTracker, setMovementTracker] = useState(() => savedGame?.movementTracker ?? createMovementTracker());
   const [selectedUnit, setSelectedUnit] = useState(null);
   const [statusMessage, setStatusMessage] = useState(() => savedGame?.statusMessage ?? '');
   const [gameResult, setGameResult] = useState(() => savedGame?.gameResult ?? null);
   const [abilityContext, setAbilityContext] = useState(null);
-  const isGameOver = Boolean(gameResult);
+  const [gameLeaders, setGameLeaders] = useState(() => initialGameLeaderData.leaders);
 
+  const isGameOver = Boolean(gameResult);
+  const isPlayerDeckFull = (playerKey) => decks[playerKey].every(Boolean);
+  const bothDecksFull = isPlayerDeckFull('p1') && isPlayerDeckFull('p2');
+  const boardShiftClass = '-translate-x-48';
+  const playerDeckShiftClass = bothDecksFull ? '-translate-x-12' : '';
+  const isPlayer1Turn = currentTurn === 'Player 1';
+
+  // Helper Wrappers
   const hasLeaderMoved = (playerKey) => Boolean(movementTracker[playerKey]?.leader);
   const getUnitMoveKey = (deckIndex, tokenId = null) => (tokenId != null ? `${deckIndex}:${tokenId}` : `${deckIndex}`);
   const hasUnitMoved = (playerKey, deckIndex, tokenId = null) => {
     const key = getUnitMoveKey(deckIndex, tokenId);
     return movementTracker[playerKey]?.units.includes(key);
   };
+  
   const markLeaderMoved = (playerKey) => {
     setMovementTracker((prev) => ({
       ...prev,
       [playerKey]: { ...prev[playerKey], leader: true },
     }));
   };
+
   const markUnitMoved = (playerKey, deckIndex, tokenId = null) => {
     setMovementTracker((prev) => {
       const key = getUnitMoveKey(deckIndex, tokenId);
@@ -569,14 +600,8 @@ const Board = () => {
       };
     });
   };
-  const resetMovementTracker = () => setMovementTracker(createMovementTracker());
-  const isPlayerDeckFull = (playerKey) => decks[playerKey].every(Boolean);
-  const bothDecksFull = isPlayerDeckFull('p1') && isPlayerDeckFull('p2');
-  const boardShiftClass = '-translate-x-48';
-  const playerDeckShiftClass = bothDecksFull ? '-translate-x-12' : '';
 
-  // Game Leaders Logic (P1 vs P2)
-  const [gameLeaders, setGameLeaders] = useState(() => initialGameLeaderData.leaders);
+  const resetMovementTracker = () => setMovementTracker(createMovementTracker());
 
   const handleLeaderError = (index) => {
     console.warn(`Leader at index ${index} failed to load. Retrying with a new character...`);
@@ -594,6 +619,7 @@ const Board = () => {
     }
   };
 
+  // Persistence Effect
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const payload = {
@@ -666,20 +692,18 @@ const Board = () => {
 
   useEffect(() => {
     if (leaders.some(card => !card)) {
-      ensureLeaderSupply();
+      const timer = setTimeout(() => ensureLeaderSupply(), 0);
+      return () => clearTimeout(timer);
     }
   }, [leaders, ensureLeaderSupply]);
 
+  // Ability Logic
   const isAbilitySilencedByJailer = (piece, placementsState = placements) => {
     if (!piece) return false;
     const enemyKey = piece.playerKey === 'p1' ? 'p2' : 'p1';
-    const adjacentIds = getAdjacentNodeIds(piece.nodeId);
+    const adjacentIds = getAdjacentNodeIds(nodes, piece.nodeId);
     return placementsState.some(unit => unit.playerKey === enemyKey && unit.cardKey === 'geolier' && adjacentIds.includes(unit.nodeId));
   };
-
-  const findNodeByCoordinates = (targetX, targetY) => nodes.find((node) =>
-    Math.abs(node.x - targetX) <= FLOAT_TOLERANCE && Math.abs(node.y - targetY) <= FLOAT_TOLERANCE
-  ) ?? null;
 
   const getAbilityPieceInstance = (context, placementsState = placements) => {
     if (!context) return null;
@@ -690,28 +714,8 @@ const Board = () => {
     ) ?? null;
   };
 
-  const getAcrobatLandingOptions = (originNodeId, placementsState = placements, leaderPositionsState = leadersPositions) => {
-    const originNode = nodeMap.get(originNodeId);
-    if (!originNode) return [];
-    const adjacentIds = getAdjacentNodeIds(originNodeId);
-    return adjacentIds.reduce((acc, neighborId) => {
-      const occupant = getNodeOccupant(neighborId, leaderPositionsState, placementsState);
-      if (!occupant) return acc;
-      const neighborNode = nodeMap.get(neighborId);
-      if (!neighborNode) return acc;
-      const deltaX = neighborNode.x - originNode.x;
-      const deltaY = neighborNode.y - originNode.y;
-      if (Math.abs(deltaX) <= FLOAT_TOLERANCE && Math.abs(deltaY) <= FLOAT_TOLERANCE) return acc;
-      const landingNode = findNodeByCoordinates(neighborNode.x + deltaX, neighborNode.y + deltaY);
-      if (!landingNode) return acc;
-      if (!isNodeEmpty(landingNode.id, placementsState, leaderPositionsState)) return acc;
-      acc.push({ nodeId: landingNode.id, overNodeId: neighborId });
-      return acc;
-    }, []);
-  };
-
   const initializeAcrobatAbility = (piece, deckCard) => {
-    const landingOptions = getAcrobatLandingOptions(piece.nodeId);
+    const landingOptions = getAcrobatLandingOptions(piece.nodeId, placements, leadersPositions);
     if (!landingOptions.length) {
       setStatusMessage('No adjacent characters to jump over.');
       return null;
@@ -736,30 +740,8 @@ const Board = () => {
     };
   };
 
-  const getRiderLandingOptions = (originNodeId, placementsState = placements, leaderPositionsState = leadersPositions) => {
-    const originNode = nodeMap.get(originNodeId);
-    if (!originNode) return [];
-    const adjacentIds = getAdjacentNodeIds(originNodeId);
-    const destinations = new Set();
-
-    adjacentIds.forEach(stepNodeId => {
-      const stepNode = nodeMap.get(stepNodeId);
-      if (!stepNode) return;
-      if (!isNodeEmpty(stepNodeId, placementsState, leaderPositionsState)) return;
-      const deltaX = stepNode.x - originNode.x;
-      const deltaY = stepNode.y - originNode.y;
-      if (Math.abs(deltaX) <= FLOAT_TOLERANCE && Math.abs(deltaY) <= FLOAT_TOLERANCE) return;
-      const landingNode = findNodeByCoordinates(stepNode.x + deltaX, stepNode.y + deltaY);
-      if (!landingNode) return;
-      if (!isNodeEmpty(landingNode.id, placementsState, leaderPositionsState)) return;
-      destinations.add(landingNode.id);
-    });
-
-    return Array.from(destinations);
-  };
-
   const initializeRiderAbility = (piece, deckCard) => {
-    const landingNodes = getRiderLandingOptions(piece.nodeId);
+    const landingNodes = getRiderLandingOptions(piece.nodeId, placements, leadersPositions);
     if (!landingNodes.length) {
       setStatusMessage('No straight path available for the Rider to move two spaces.');
       return null;
@@ -782,6 +764,7 @@ const Board = () => {
     };
   };
 
+<<<<<<< HEAD
   const initializeManipulatorAbility = (piece, deckCard) => {
     const originNode = nodeMap.get(piece.nodeId);
     if (!originNode) return null;
@@ -1117,6 +1100,8 @@ const Board = () => {
     };
   };
 
+=======
+>>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
   const concludeAbilityUsage = (placementsState, message) => {
     if (!abilityContext) return;
     const abilityMeta = abilityContext;
@@ -1246,6 +1231,7 @@ const Board = () => {
       setAbilityContext(initialized);
       return;
     }
+<<<<<<< HEAD
     if (piece.cardKey === 'manipulatrice') {
       const initialized = initializeManipulatorAbility(piece, deckCard);
       if (!initialized) return;
@@ -1288,6 +1274,8 @@ const Board = () => {
       setAbilityContext(initialized);
       return;
     }
+=======
+>>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
     setStatusMessage('Ability interactions are being prepared.');
   };
 
@@ -1305,14 +1293,16 @@ const Board = () => {
     if (!abilityContext) return;
     const stillExists = placements.some(p => p.playerKey === abilityContext.playerKey && p.deckIndex === abilityContext.deckIndex && (abilityContext.tokenId == null || p.tokenId === abilityContext.tokenId));
     if (!stillExists || abilityContext.playerLabel !== currentTurn || isGameOver) {
-      setAbilityContext(null);
+      const timer = setTimeout(() => setAbilityContext(null), 0);
+      return () => clearTimeout(timer);
     }
   }, [abilityContext, placements, currentTurn, isGameOver]);
 
   useEffect(() => {
     if (!abilityContext) return;
     if (selectedSummon?.forced) {
-      setAbilityContext(null);
+      const timer = setTimeout(() => setAbilityContext(null), 0);
+      return () => clearTimeout(timer);
     }
   }, [selectedSummon, abilityContext]);
 
@@ -1329,506 +1319,6 @@ const Board = () => {
     }
     if (abilityContext.id === 'cavalier') {
       executeRiderDash(node.id);
-      return;
-    }
-    if (abilityContext.id === 'manipulatrice') {
-      const activePiece = getAbilityPieceInstance(abilityContext);
-      if (!activePiece) {
-        setAbilityContext(null);
-        setStatusMessage('Selected unit is no longer available.');
-        return;
-      }
-
-      // Tahap 1: pilih target musuh yang se-garis
-      if (abilityContext.phase === 'manipulator-select-target') {
-        const targetPlacement = placements.find(p =>
-          p.nodeId === node.id && p.playerKey !== activePiece.playerKey
-        );
-        if (!targetPlacement) {
-          setStatusMessage('Pilih satu musuh yang disorot sebagai target.');
-          return;
-        }
-
-        const targetNode = nodes.find(n => n.id === targetPlacement.nodeId);
-        if (!targetNode) {
-          setAbilityContext(null);
-          return;
-        }
-
-        // Cari semua petak 1 langkah di sekitar target yang kosong
-        const candidateIds = getAdjacentNodeIds(targetNode.id);
-        const movableNodes = candidateIds.filter(id => isNodeEmpty(id));
-
-        if (!movableNodes.length) {
-          setStatusMessage('Sekitar target penuh, pilih musuh lain.');
-          return;
-        }
-
-        setAbilityContext({
-          ...abilityContext,
-          phase: 'manipulator-select-destination',
-          highlightNodes: movableNodes,
-          data: {
-            ...abilityContext.data,
-            hasProgress: true,
-            selectedTarget: {
-              nodeId: targetPlacement.nodeId,
-              playerKey: targetPlacement.playerKey,
-              deckIndex: targetPlacement.deckIndex,
-              tokenId: targetPlacement.tokenId ?? null,
-            },
-          },
-        });
-        setStatusMessage('Pilih petak kosong di sekitar target untuk memindahkannya.');
-        return;
-      }
-
-      // Tahap 2: pilih petak tujuan di sekitar target
-      if (abilityContext.phase === 'manipulator-select-destination') {
-        const selected = abilityContext.data?.selectedTarget;
-        if (!selected) {
-          setAbilityContext(null);
-          setStatusMessage('Target tidak lagi tersedia.');
-          return;
-        }
-
-        if (!abilityContext.highlightNodes?.includes(node.id)) {
-          setStatusMessage('Pilih salah satu petak yang disorot.');
-          return;
-        }
-
-        const targetPlacement = placements.find(p =>
-          p.nodeId === selected.nodeId &&
-          p.playerKey === selected.playerKey &&
-          p.deckIndex === selected.deckIndex &&
-          (selected.tokenId == null || p.tokenId === selected.tokenId)
-        );
-        if (!targetPlacement) {
-          setAbilityContext(null);
-          setStatusMessage('Musuh tersebut sudah tidak ada.');
-          return;
-        }
-
-        if (!isNodeEmpty(node.id)) {
-          setStatusMessage('Petak ini sudah terisi. Pilih petak lain.');
-          return;
-        }
-
-        const updatedPlacements = placements.map(p =>
-          p === targetPlacement ? { ...p, nodeId: node.id } : p
-        );
-
-        setPlacements(updatedPlacements);
-        setDecks(prev => ({
-          ...prev,
-          [targetPlacement.playerKey]: prev[targetPlacement.playerKey].map((card, idx) => {
-            if (idx !== targetPlacement.deckIndex || !card) return card;
-            if (card.isDual) return card;
-            return { ...card, boardNodeId: node.id };
-          }),
-        }));
-
-        concludeAbilityUsage(updatedPlacements, 'Manipulator memindahkan musuh satu petak.');
-        return;
-      }
-
-      // Fallback jika phase tidak dikenal
-      setStatusMessage('Ability Manipulator dibatalkan.');
-      setAbilityContext(null);
-      return;
-    }
-    if (abilityContext.id === 'garderoyal') {
-      const activePiece = getAbilityPieceInstance(abilityContext);
-      if (!activePiece) {
-        setAbilityContext(null);
-        setStatusMessage('Selected unit is no longer available.');
-        return;
-      }
-
-      // Tahap 1: pindahkan Royal Guard ke petak adjacent Leader
-      if (abilityContext.phase === 'royal-select-adjacent') {
-        if (!abilityContext.highlightNodes?.includes(node.id)) {
-          setStatusMessage('Pilih salah satu petak yang disorot di sekitar Leader.');
-          return;
-        }
-
-        const firstDestId = node.id;
-        const intermediatePlacements = placements.map(p =>
-          (p.playerKey === activePiece.playerKey &&
-           p.deckIndex === activePiece.deckIndex &&
-           (activePiece.tokenId == null || p.tokenId === activePiece.tokenId))
-            ? { ...p, nodeId: firstDestId }
-            : p
-        );
-
-        // Cari langkah tambahan satu petak dari posisi baru
-        const stepOptions = getAdjacentNodeIds(firstDestId).filter(id =>
-          isNodeEmpty(id, intermediatePlacements, leadersPositions)
-        );
-
-        if (!stepOptions.length) {
-          // Tidak ada langkah tambahan, ability selesai di sini
-          setPlacements(intermediatePlacements);
-          setDecks(prev => ({
-            ...prev,
-            [activePiece.playerKey]: prev[activePiece.playerKey].map((card, idx) => {
-              if (idx !== activePiece.deckIndex || !card) return card;
-              if (card.isDual) return card;
-              return { ...card, boardNodeId: firstDestId };
-            }),
-          }));
-          concludeAbilityUsage(intermediatePlacements, 'Royal Guard bergerak di samping Leader.');
-          return;
-        }
-
-        setPlacements(intermediatePlacements);
-        setDecks(prev => ({
-          ...prev,
-          [activePiece.playerKey]: prev[activePiece.playerKey].map((card, idx) => {
-            if (idx !== activePiece.deckIndex || !card) return card;
-            if (card.isDual) return card;
-            return { ...card, boardNodeId: firstDestId };
-          }),
-        }));
-
-        setAbilityContext({
-          ...abilityContext,
-          originNodeId: firstDestId,
-          phase: 'royal-select-step',
-          highlightNodes: stepOptions,
-          data: {
-            ...abilityContext.data,
-            hasProgress: true,
-          },
-        });
-        setStatusMessage('Royal Guard boleh melangkah satu petak lagi.');
-        return;
-      }
-
-      // Tahap 2: pilih langkah tambahan satu petak dari posisi baru
-      if (abilityContext.phase === 'royal-select-step') {
-        if (!abilityContext.highlightNodes?.includes(node.id)) {
-          setStatusMessage('Pilih salah satu petak yang disorot untuk langkah tambahan.');
-          return;
-        }
-
-        const updatedPlacements = placements.map(p =>
-          (p.playerKey === activePiece.playerKey &&
-           p.deckIndex === activePiece.deckIndex &&
-           (activePiece.tokenId == null || p.tokenId === activePiece.tokenId))
-            ? { ...p, nodeId: node.id }
-            : p
-        );
-
-        setPlacements(updatedPlacements);
-        setDecks(prev => ({
-          ...prev,
-          [activePiece.playerKey]: prev[activePiece.playerKey].map((card, idx) => {
-            if (idx !== activePiece.deckIndex || !card) return card;
-            if (card.isDual) return card;
-            return { ...card, boardNodeId: node.id };
-          }),
-        }));
-
-        concludeAbilityUsage(updatedPlacements, 'Royal Guard menyelesaikan langkah tambahannya.');
-        return;
-      }
-
-      setStatusMessage('Ability Royal Guard dibatalkan.');
-      setAbilityContext(null);
-      return;
-    }
-
-    if (abilityContext.id === 'lancegrappin') {
-      const activePiece = getAbilityPieceInstance(abilityContext);
-      if (!activePiece) {
-        setAbilityContext(null);
-        setStatusMessage('Selected unit is no longer available.');
-        return;
-      }
-
-      const originNode = nodeMap.get(activePiece.nodeId);
-      if (!originNode) {
-        setAbilityContext(null);
-        setStatusMessage('Claw Launcher tidak berada di petak papan yang valid.');
-        return;
-      }
-
-      // Tahap 1: pilih karakter target di garis lurus
-      if (abilityContext.phase === 'claw-select-target') {
-        const targetPlacement = placements.find(p =>
-          p.nodeId === node.id && p.playerKey !== activePiece.playerKey
-        );
-        if (!targetPlacement) {
-          setStatusMessage('Pilih salah satu karakter yang disorot sebagai target.');
-          return;
-        }
-
-        const targetNode = nodeMap.get(targetPlacement.nodeId);
-        if (!targetNode) {
-          setAbilityContext(null);
-          setStatusMessage('Target tidak lagi berada di petak valid.');
-          return;
-        }
-
-        // Hitung semua petak kosong antara origin dan target (untuk opsi "bergerak ke depan")
-        const dx = targetNode.x - originNode.x;
-        const dy = targetNode.y - originNode.y;
-        const stepX = dx === 0 ? 0 : dx > 0 ? 1 : -1;
-        const stepY = dy === 0 ? 0 : dy > 0 ? 1 : -1;
-
-        const forwardPath = [];
-        let currentX = originNode.x + stepX;
-        let currentY = originNode.y + stepY;
-        while (Math.abs(currentX - targetNode.x) > FLOAT_TOLERANCE || Math.abs(currentY - targetNode.y) > FLOAT_TOLERANCE) {
-          const nodeOnPath = findNodeByCoordinates(currentX, currentY);
-          if (!nodeOnPath) break;
-          if (!isNodeEmpty(nodeOnPath.id)) {
-            // Ada penghalang yang muncul setelah inisialisasi -> batalkan
-            setStatusMessage('Jalur Claw Launcher kini terhalang. Ability dibatalkan.');
-            setAbilityContext(null);
-            return;
-          }
-          forwardPath.push(nodeOnPath.id);
-          currentX += stepX;
-          currentY += stepY;
-        }
-
-        // Hitung posisi adjacent ke origin untuk opsi "menarik" (drag sampai adjacent)
-        const adjacentToOrigin = getAdjacentNodeIds(originNode.id).filter(id => isNodeEmpty(id));
-
-        const nextHighlights = new Set();
-        forwardPath.forEach(id => nextHighlights.add(id));
-        adjacentToOrigin.forEach(id => nextHighlights.add(id));
-
-        if (!nextHighlights.size) {
-          setStatusMessage('Tidak ada petak yang valid untuk Claw Launcher.');
-          setAbilityContext(null);
-          return;
-        }
-
-        setAbilityContext({
-          ...abilityContext,
-          phase: 'claw-select-destination',
-          highlightNodes: Array.from(nextHighlights),
-          data: {
-            ...abilityContext.data,
-            hasProgress: true,
-            selectedTarget: {
-              nodeId: targetPlacement.nodeId,
-              playerKey: targetPlacement.playerKey,
-              deckIndex: targetPlacement.deckIndex,
-              tokenId: targetPlacement.tokenId ?? null,
-            },
-            originNodeId: originNode.id,
-            targetNodeId: targetNode.id,
-            forwardPath,
-          },
-        });
-        setStatusMessage('Pilih petak untuk Claw Launcher: maju ke depan atau tarik musuh ke arahmu.');
-        return;
-      }
-
-      // Tahap 2: pilih destinasi
-      if (abilityContext.phase === 'claw-select-destination') {
-        const data = abilityContext.data ?? {};
-        const selected = data.selectedTarget;
-        if (!selected) {
-          setAbilityContext(null);
-          setStatusMessage('Target tidak lagi tersedia.');
-          return;
-        }
-
-        if (!abilityContext.highlightNodes?.includes(node.id)) {
-          setStatusMessage('Pilih salah satu petak yang disorot.');
-          return;
-        }
-
-        const targetPlacement = placements.find(p =>
-          p.nodeId === selected.nodeId &&
-          p.playerKey === selected.playerKey &&
-          p.deckIndex === selected.deckIndex &&
-          (selected.tokenId == null || p.tokenId === selected.tokenId)
-        );
-        if (!targetPlacement) {
-          setAbilityContext(null);
-          setStatusMessage('Target sudah tidak ada.');
-          return;
-        }
-
-        // Tentukan apakah pilihan adalah maju ke depan (Claw Launcher bergerak) atau tarik (musuh digeser)
-        const isForward = data.forwardPath?.includes(node.id);
-
-        if (isForward) {
-          // Claw Launcher bergerak sampai petak yang dipilih di garis lurus
-          if (!isNodeEmpty(node.id)) {
-            setStatusMessage('Petak ini sudah terisi. Pilih petak lain.');
-            return;
-          }
-
-          const updatedPlacements = placements.map(p =>
-            (p.playerKey === activePiece.playerKey &&
-             p.deckIndex === activePiece.deckIndex &&
-             (activePiece.tokenId == null || p.tokenId === activePiece.tokenId))
-              ? { ...p, nodeId: node.id }
-              : p
-          );
-
-          setPlacements(updatedPlacements);
-          setDecks(prev => ({
-            ...prev,
-            [activePiece.playerKey]: prev[activePiece.playerKey].map((card, idx) => {
-              if (idx !== activePiece.deckIndex || !card) return card;
-              if (card.isDual) return card;
-              return { ...card, boardNodeId: node.id };
-            }),
-          }));
-
-          concludeAbilityUsage(updatedPlacements, 'Claw Launcher meluncur ke depan sepanjang garis.');
-          return;
-        }
-
-        // Mode tarik: musuh dipindah ke petak yang dipilih (harus adjacent ke origin)
-        const originId = data.originNodeId ?? originNode.id;
-        const adjToOrigin = getAdjacentNodeIds(originId);
-        if (!adjToOrigin.includes(node.id)) {
-          setStatusMessage('Untuk menarik musuh, pilih petak yang bersebelahan denganmu.');
-          return;
-        }
-
-        if (!isNodeEmpty(node.id)) {
-          setStatusMessage('Petak ini sudah terisi. Pilih petak lain.');
-          return;
-        }
-
-        const updatedPlacements = placements.map(p =>
-          p === targetPlacement ? { ...p, nodeId: node.id } : p
-        );
-
-        setPlacements(updatedPlacements);
-        setDecks(prev => ({
-          ...prev,
-          [targetPlacement.playerKey]: prev[targetPlacement.playerKey].map((card, idx) => {
-            if (idx !== targetPlacement.deckIndex || !card) return card;
-            if (card.isDual) return card;
-            return { ...card, boardNodeId: node.id };
-          }),
-        }));
-
-        concludeAbilityUsage(updatedPlacements, 'Claw Launcher menarik musuh hingga adjacent.');
-        return;
-      }
-
-      setStatusMessage('Ability Claw Launcher dibatalkan.');
-      setAbilityContext(null);
-      return;
-    }
-
-    if (abilityContext.id === 'tavernier') {
-      const activePiece = getAbilityPieceInstance(abilityContext);
-      if (!activePiece) {
-        setAbilityContext(null);
-        setStatusMessage('Selected unit is no longer available.');
-        return;
-      }
-
-      // Tahap 1: pilih ally adjacent
-      if (abilityContext.phase === 'brew-select-ally') {
-        const targetPlacement = placements.find(p =>
-          p.nodeId === node.id &&
-          p.playerKey === activePiece.playerKey
-        );
-        if (!targetPlacement) {
-          setStatusMessage('Pilih satu ally adjacent yang disorot.');
-          return;
-        }
-
-        const targetNode = nodes.find(n => n.id === targetPlacement.nodeId);
-        if (!targetNode) {
-          setAbilityContext(null);
-          setStatusMessage('Ally tidak lagi berada di petak valid.');
-          return;
-        }
-
-        // Mirip Manipulator: cari semua petak 1 langkah di sekitar target yang kosong
-        const candidateIds = getAdjacentNodeIds(targetNode.id);
-        const movableNodes = candidateIds.filter(id => isNodeEmpty(id));
-
-        if (!movableNodes.length) {
-          setStatusMessage('Sekitar ally penuh, pilih ally lain.');
-          return;
-        }
-
-        setAbilityContext({
-          ...abilityContext,
-          phase: 'brew-select-destination',
-          highlightNodes: movableNodes,
-          data: {
-            ...abilityContext.data,
-            hasProgress: true,
-            selectedAlly: {
-              nodeId: targetPlacement.nodeId,
-              playerKey: targetPlacement.playerKey,
-              deckIndex: targetPlacement.deckIndex,
-              tokenId: targetPlacement.tokenId ?? null,
-            },
-          },
-        });
-        setStatusMessage('Pilih petak kosong di sekitar ally untuk memindahkannya.');
-        return;
-      }
-
-      // Tahap 2: pilih petak tujuan untuk ally
-      if (abilityContext.phase === 'brew-select-destination') {
-        const selected = abilityContext.data?.selectedAlly;
-        if (!selected) {
-          setAbilityContext(null);
-          setStatusMessage('Ally tidak lagi tersedia.');
-          return;
-        }
-
-        if (!abilityContext.highlightNodes?.includes(node.id)) {
-          setStatusMessage('Pilih salah satu petak yang disorot.');
-          return;
-        }
-
-        const allyPlacement = placements.find(p =>
-          p.nodeId === selected.nodeId &&
-          p.playerKey === selected.playerKey &&
-          p.deckIndex === selected.deckIndex &&
-          (selected.tokenId == null || p.tokenId === selected.tokenId)
-        );
-        if (!allyPlacement) {
-          setAbilityContext(null);
-          setStatusMessage('Ally tersebut sudah tidak ada.');
-          return;
-        }
-
-        if (!isNodeEmpty(node.id)) {
-          setStatusMessage('Petak ini sudah terisi. Pilih petak lain.');
-          return;
-        }
-
-        const updatedPlacements = placements.map(p =>
-          p === allyPlacement ? { ...p, nodeId: node.id } : p
-        );
-
-        setPlacements(updatedPlacements);
-        setDecks(prev => ({
-          ...prev,
-          [allyPlacement.playerKey]: prev[allyPlacement.playerKey].map((card, idx) => {
-            if (idx !== allyPlacement.deckIndex || !card) return card;
-            if (card.isDual) return card;
-            return { ...card, boardNodeId: node.id };
-          }),
-        }));
-
-        concludeAbilityUsage(updatedPlacements, 'Brewmaster memindahkan ally satu petak.');
-        return;
-      }
-
-      setStatusMessage('Ability Brewmaster dibatalkan.');
-      setAbilityContext(null);
       return;
     }
 
@@ -2066,89 +1556,194 @@ const Board = () => {
     setAbilityContext(null);
   };
 
-        const getPlayerPieceCount = (playerKey) => placements.filter(piece => piece.playerKey === playerKey).length;
+  const getPlayerPieceCount = (playerKey) => placements.filter(piece => piece.playerKey === playerKey).length;
 
-        const handlePostMove = (playerLabel) => {
-          if (isGameOver) return;
-          const playerKey = playerLabelToKey(playerLabel);
-          const piecesCount = getPlayerPieceCount(playerKey);
-          const hasDraftOptions = leaders.some(Boolean);
-          if (bothDecksFull || piecesCount >= 4 || !hasDraftOptions) {
-            toggleTurn();
-          } else {
-            setCanPickFor(playerLabel);
+  const handlePostMove = (playerLabel) => {
+    if (isGameOver) return;
+    const playerKey = playerLabelToKey(playerLabel);
+    const piecesCount = getPlayerPieceCount(playerKey);
+    const hasDraftOptions = leaders.some(Boolean);
+    if (bothDecksFull || piecesCount >= 4 || !hasDraftOptions) {
+      toggleTurn();
+    } else {
+      setCanPickFor(playerLabel);
+    }
+  };
+
+  const toggleTurn = () => {
+    if (isGameOver) return;
+    setCurrentTurn(prev => prev === 'Player 1' ? 'Player 2' : 'Player 1');
+    setSelectedLeader(null);
+    setSelectedUnit(null);
+    setSelectedNode(null);
+    setCanPickFor(null);
+    setSelectedSummon(null);
+    resetMovementTracker();
+    setStatusMessage('');
+  };
+
+  const endPhase = () => {
+    if (isGameOver) return;
+    if (selectedSummon?.forced) return;
+    handlePostMove(currentTurn);
+  };
+
+  const isValidPlacementNode = (playerKey, node) => {
+    if (!node) return false;
+    if (playerKey === 'p1') {
+      return node.row === 0;
+    }
+    if (playerKey === 'p2') {
+      return node.row === columnMaxRow[node.col];
+    }
+    return false;
+  };
+
+  const finalizeActionOutcome = (placementsState, leaderPositionsState) => {
+    const outcome = determineGameOutcome(placementsState, leaderPositionsState);
+    if (outcome) {
+      setGameResult(outcome);
+      setStatusMessage('');
+      setSelectedLeader(null);
+      setSelectedUnit(null);
+      setSelectedSummon(null);
+      setCanPickFor(null);
+      return true;
+    }
+    return false;
+  };
+
+  const handleNodeClick = (node, image) => {
+    if (isGameOver) return;
+    if (abilityContext) {
+      handleAbilityNodeInteraction(node);
+      return;
+    }
+    const nodeId = node.id;
+
+    if (selectedSummon) {
+      attemptPlacement(node);
+      return;
+    }
+
+    if (canPickFor && canPickFor === currentTurn) {
+      return;
+    }
+
+    // If clicking on a node that has a leader
+    const clickedIsP1 = leadersPositions.p1 === nodeId;
+    const clickedIsP2 = leadersPositions.p2 === nodeId;
+    const clickedLeaderKey = clickedIsP1 ? 'p1' : clickedIsP2 ? 'p2' : null;
+
+    // If current player clicked their own leader, select/deselect it
+    if ((currentTurn === 'Player 1' && clickedIsP1) || (currentTurn === 'Player 2' && clickedIsP2)) {
+      if (hasLeaderMoved(clickedLeaderKey)) {
+        return;
+      }
+      // Select or toggle off
+      if (selectedLeader && selectedLeader.nodeId === nodeId) {
+        setSelectedLeader(null);
+        setSelectedNode(null);
+      } else {
+        setSelectedLeader({ player: currentTurn, playerKey: playerLabelToKey(currentTurn), nodeId, x: node.x, y: node.y, image });
+        setSelectedUnit(null);
+        setSelectedNode({ id: nodeId, x: node.x, y: node.y, image });
+      }
+      return;
+    }
+
+    const currentPlayerKey = playerLabelToKey(currentTurn);
+    const clickedUnit = placements.find(piece => piece.playerKey === currentPlayerKey && piece.nodeId === nodeId);
+    if (clickedUnit) {
+      if (hasUnitMoved(currentPlayerKey, clickedUnit.deckIndex, clickedUnit.tokenId)) {
+        return;
+      }
+      if (selectedUnit && selectedUnit.deckIndex === clickedUnit.deckIndex && selectedUnit.tokenId === clickedUnit.tokenId) {
+        setSelectedUnit(null);
+        setSelectedNode(null);
+      } else {
+        setSelectedUnit({ ...clickedUnit, playerKey: currentPlayerKey, player: currentTurn });
+        setSelectedLeader(null);
+        setSelectedNode({ id: nodeId, x: node.x, y: node.y, image: clickedUnit.image });
+      }
+      return;
+    }
+
+    // If a leader is selected and clicked an empty node within range, move
+    if (selectedLeader) {
+      const fromNode = selectedLeader.nodeId;
+      const toNode = nodeId;
+      if (isNodeEmpty(toNode, placements, leadersPositions) && isWithinMoveRange(nodes, fromNode, toNode)) {
+        const leaderKey = selectedLeader.playerKey;
+        const nextPositions = {
+          ...leadersPositions,
+          [leaderKey]: toNode,
+        };
+
+        if (wouldTrapSelf(nodes, leaderKey, placements, nextPositions)) {
+          setStatusMessage('You cannot move your leader into capture or surround range.');
+          return;
+        }
+
+        setLeadersPositions(nextPositions);
+        setStatusMessage('');
+        setSelectedLeader(null);
+        setSelectedNode(null);
+        markLeaderMoved(leaderKey);
+        if (finalizeActionOutcome(placements, nextPositions)) {
+          return;
+        }
+      }
+      return;
+    }
+
+    if (selectedUnit) {
+      const fromNode = selectedUnit.nodeId;
+      const toNode = nodeId;
+      if (isNodeEmpty(toNode, placements, leadersPositions) && isWithinMoveRange(nodes, fromNode, toNode)) {
+        const playerKey = selectedUnit.playerKey;
+        const nextPlacements = placements.map(piece => {
+          if (piece.playerKey === playerKey && piece.deckIndex === selectedUnit.deckIndex) {
+            return { ...piece, nodeId: toNode };
           }
-        };
+          return piece;
+        });
+        if (wouldTrapSelf(nodes, playerKey, nextPlacements, leadersPositions)) {
+          setStatusMessage('Moving that unit would trap your own leader.');
+          return;
+        }
 
-        const toggleTurn = () => {
-          if (isGameOver) return;
-          setCurrentTurn(prev => prev === 'Player 1' ? 'Player 2' : 'Player 1');
-          setSelectedLeader(null);
-          setSelectedUnit(null);
-          setSelectedNode(null);
-          setCanPickFor(null);
-          setSelectedSummon(null);
-          resetMovementTracker();
-          setStatusMessage('');
-        };
+        const updatedDeck = decks[playerKey].map((card, idx) => {
+          if (idx !== selectedUnit.deckIndex || !card) return card;
+          if (card.isDual) return card;
+          return { ...card, boardNodeId: toNode };
+        });
 
-        const endPhase = () => {
-          if (isGameOver) return;
-          if (selectedSummon?.forced) return; // cannot change phase while forced placement is pending
-          handlePostMove(currentTurn);
-        };
+        const nextDecks = { ...decks, [playerKey]: updatedDeck };
 
-        const isNodeEmpty = (nodeId, placementsState = placements, leaderPositionsState = leadersPositions) => {
-          if (leaderPositionsState.p1 === nodeId || leaderPositionsState.p2 === nodeId) return false;
-          return !placementsState.some(piece => piece.nodeId === nodeId);
-        };
+        setPlacements(nextPlacements);
+        setDecks(nextDecks);
+        setStatusMessage('');
+        setSelectedUnit(null);
+        setSelectedNode(null);
+        markUnitMoved(playerKey, selectedUnit.deckIndex);
+        finalizeActionOutcome(nextPlacements, leadersPositions);
+      }
+      return;
+    }
+  };
 
-        const isValidPlacementNode = (playerKey, node) => {
-          if (!node) return false;
-          if (playerKey === 'p1') {
-            return node.row === 0;
-          }
-          if (playerKey === 'p2') {
-            return node.row === columnMaxRow[node.col];
-          }
-          return false;
-        };
+  const handlePickCard = (index) => {
+    if (isGameOver) return;
+    if (!canPickFor) return;
+    if (currentTurn !== canPickFor) return;
+    if (bothDecksFull) {
+      setCanPickFor(null);
+      toggleTurn();
+      return;
+    }
 
-        const isWithinMoveRange = (fromNode, toNode) => {
-          const from = nodes.find(n => n.id === fromNode);
-          const to = nodes.find(n => n.id === toNode);
-          if (!from || !to) return false;
-          const dx = Math.abs(from.x - to.x);
-          const dy = Math.abs(from.y - to.y);
-          return dx <= 1 && dy <= 1 && !(dx === 0 && dy === 0);
-        };
-
-        const getAdjacentNodeIds = (nodeId) => {
-          const target = nodes.find(n => n.id === nodeId);
-          if (!target) return [];
-          return nodes
-            .filter(n => {
-              const dx = Math.abs(n.x - target.x);
-              const dy = Math.abs(n.y - target.y);
-              return (dx > 0 || dy > 0) && dx <= 1 && dy <= 1;
-            })
-            .map(n => n.id);
-        };
-
-        const getNodeOccupant = (nodeId, leaderPositionsState = leadersPositions, placementsState = placements) => {
-          if (leaderPositionsState.p1 === nodeId) return { type: 'leader', playerKey: 'p1' };
-          if (leaderPositionsState.p2 === nodeId) return { type: 'leader', playerKey: 'p2' };
-          const unit = placementsState.find(piece => piece.nodeId === nodeId);
-          return unit ? { ...unit, type: 'unit' } : null;
-        };
-
-        const evaluateLeaderState = (playerKey, placementsState = placements, leaderPositionsState = leadersPositions) => {
-          const leaderNodeId = leaderPositionsState[playerKey];
-          const adjacentIds = getAdjacentNodeIds(leaderNodeId);
-          const enemyKey = playerKey === 'p1' ? 'p2' : 'p1';
-          let enemyCount = 0;
-          let allOccupied = adjacentIds.length > 0;
-
+<<<<<<< HEAD
           // Track whether there is an adjacent Assassin and whether there are other adjacent allies
           let hasAssassinAdjacent = false;
           let otherAlliesAdjacent = 0;
@@ -2182,48 +1777,74 @@ const Board = () => {
             surrounded: allOccupied,
           };
         };
+=======
+    const card = leaders[index];
+    if (!card) return; // no card to pick
 
-        const wouldTrapSelf = (playerKey, placementsState, leaderPositionsState) => {
-          const status = evaluateLeaderState(playerKey, placementsState, leaderPositionsState);
-          return status.captured || status.surrounded;
-        };
+    const playerKey = playerLabelToKey(canPickFor);
+    const totalPieces = getPlayerPieceCount(playerKey);
+    if (totalPieces >= 4) {
+      console.warn(`Maximum characters reached for ${canPickFor}`);
+      setCanPickFor(null);
+      toggleTurn();
+      return;
+    }
+>>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
 
-        const determineGameOutcome = (placementsState = placements, leaderPositionsState = leadersPositions) => {
-          const p1Status = evaluateLeaderState('p1', placementsState, leaderPositionsState);
-          if (p1Status.captured || p1Status.surrounded) {
-            return {
-              winner: playerKeyToLabel('p2'),
-              loser: playerKeyToLabel('p1'),
-              reason: p1Status.captured ? 'capture' : 'surround',
-            };
-          }
+    const boardImage = getBoardAssetForPlayer(card, playerKey) ?? card;
+    const cardKey = extractPortraitKey(card);
+    const cardInfo = getCardMetaFromAlias(cardKey);
+    const isDual = isDualCharacter(cardKey);
+    const emptySlot = decks[playerKey].findIndex(slot => !slot);
+    if (emptySlot === -1) {
+      console.warn('No empty deck slot available.');
+      setCanPickFor(null);
+      toggleTurn();
+      return;
+    }
 
-          const p2Status = evaluateLeaderState('p2', placementsState, leaderPositionsState);
-          if (p2Status.captured || p2Status.surrounded) {
-            return {
-              winner: playerKeyToLabel('p1'),
-              loser: playerKeyToLabel('p2'),
-              reason: p2Status.captured ? 'capture' : 'surround',
-            };
-          }
+    const updatedRetired = retiredCards.includes(card) ? retiredCards : [...retiredCards, card];
+    const cardData = {
+      portrait: card,
+      boardImage,
+      boardNodeId: null,
+      cardKey,
+      abilityType: cardInfo.abilityType,
+      abilityName: cardInfo.abilityName,
+      isDual,
+      placedTokens: [],
+    };
+    setDecks((prev) => {
+      const next = { ...prev };
+      next[playerKey] = next[playerKey].map((slot, idx) => (idx === emptySlot ? cardData : slot));
+      return next;
+    });
 
-          return null;
-        };
+    let poolExhausted = false;
+    setLeaders(prev => {
+      const next = [...prev];
+      next[index] = null;
+      const { card: replacement, exhausted } = drawLeaderReplacement(next, updatedRetired);
+      poolExhausted = exhausted;
+      next[index] = replacement;
+      return next;
+    });
 
-        const finalizeActionOutcome = (placementsState, leaderPositionsState) => {
-          const outcome = determineGameOutcome(placementsState, leaderPositionsState);
-          if (outcome) {
-            setGameResult(outcome);
-            setStatusMessage('');
-            setSelectedLeader(null);
-            setSelectedUnit(null);
-            setSelectedSummon(null);
-            setCanPickFor(null);
-            return true;
-          }
-          return false;
-        };
+    setRetiredCards(updatedRetired);
+    if (poolExhausted) {
+      setStatusMessage('All champions recruited; no further characters available.');
+    }
 
+    setSelectedSummon({
+      player: canPickFor,
+      playerKey,
+      cardIndex: emptySlot,
+      image: boardImage,
+      forced: true,
+      pendingTokens: isDual ? [...DUAL_TOKEN_SEQUENCE] : null,
+    });
+
+<<<<<<< HEAD
         const moveNemesisIfNeeded = (movedLeaderKey, placementsState, leaderPositionsState) => {
           const enemyKey = movedLeaderKey === 'p1' ? 'p2' : 'p1';
           // Nemesis hanya boleh bereaksi ketika pemilik Nemesis adalah currentTurn
@@ -2298,71 +1919,74 @@ const Board = () => {
             return;
           }
           const nodeId = node.id;
+=======
+    setCanPickFor(null);
+  };
+>>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
 
-          if (selectedSummon) {
-            attemptPlacement(node);
-            return;
-          }
+  const attemptPlacement = (node) => {
+    if (isGameOver) return;
+    if (!selectedSummon || !node) return;
+    const { playerKey, cardIndex, pendingTokens } = selectedSummon;
+    const playerLabel = playerKeyToLabel(playerKey);
 
-          if (canPickFor && canPickFor === currentTurn) {
-            return;
-          }
+    if (currentTurn !== playerLabel) return;
+    if (!isValidPlacementNode(playerKey, node)) return;
+    if (!isNodeEmpty(node.id, placements, leadersPositions)) return;
+    const tokenQueue = pendingTokens ? [...pendingTokens] : null;
+    const tokenId = tokenQueue?.length ? tokenQueue[0] : null;
+    const nextPlacementRecord = buildPlacementRecord(playerKey, cardIndex, node.id, decks, tokenId);
+    if (!nextPlacementRecord) {
+      console.warn('Failed to build placement record for summon.');
+      return;
+    }
 
-          // If clicking on a node that has a leader
-          const clickedIsP1 = leadersPositions.p1 === nodeId;
-          const clickedIsP2 = leadersPositions.p2 === nodeId;
-          const clickedLeaderKey = clickedIsP1 ? 'p1' : clickedIsP2 ? 'p2' : null;
+    const nextPlacements = [...placements, nextPlacementRecord];
 
-          // If current player clicked their own leader, select/deselect it
-          if ((currentTurn === 'Player 1' && clickedIsP1) || (currentTurn === 'Player 2' && clickedIsP2)) {
-            if (hasLeaderMoved(clickedLeaderKey)) {
-              return;
-            }
-            // Select or toggle off
-            if (selectedLeader && selectedLeader.nodeId === nodeId) {
-              setSelectedLeader(null);
-              setSelectedNode(null);
-            } else {
-              setSelectedLeader({ player: currentTurn, playerKey: playerLabelToKey(currentTurn), nodeId, x: node.x, y: node.y, image });
-              setSelectedUnit(null);
-              setSelectedNode({ id: nodeId, x: node.x, y: node.y, image });
-            }
-            return;
-          }
+    if (wouldTrapSelf(nodes, playerKey, nextPlacements, leadersPositions)) {
+      setStatusMessage('This placement would trap your own leader. Choose another spot.');
+      return;
+    }
 
-          const currentPlayerKey = playerLabelToKey(currentTurn);
-          const clickedUnit = placements.find(piece => piece.playerKey === currentPlayerKey && piece.nodeId === nodeId);
-          if (clickedUnit) {
-            if (hasUnitMoved(currentPlayerKey, clickedUnit.deckIndex, clickedUnit.tokenId)) {
-              return;
-            }
-            if (selectedUnit && selectedUnit.deckIndex === clickedUnit.deckIndex && selectedUnit.tokenId === clickedUnit.tokenId) {
-              setSelectedUnit(null);
-              setSelectedNode(null);
-            } else {
-              setSelectedUnit({ ...clickedUnit, playerKey: currentPlayerKey, player: currentTurn });
-              setSelectedLeader(null);
-              setSelectedNode({ id: nodeId, x: node.x, y: node.y, image: clickedUnit.image });
-            }
-            return;
-          }
+    const nextDecks = {
+      ...decks,
+      [playerKey]: decks[playerKey].map((card, idx) => {
+        if (idx !== cardIndex || !card) return card;
+        if (card.isDual) {
+          const placedTokens = Array.from(new Set([...(card.placedTokens ?? []), tokenId].filter(Boolean)));
+          return { ...card, placedTokens };
+        }
+        return { ...card, boardNodeId: node.id };
+      })
+    };
 
-          // If a leader is selected and clicked an empty node within range, move
-          if (selectedLeader) {
-            const fromNode = selectedLeader.nodeId;
-            const toNode = nodeId;
-            if (isNodeEmpty(toNode) && isWithinMoveRange(fromNode, toNode)) {
-              const leaderKey = selectedLeader.playerKey;
-              const nextPositions = {
-                ...leadersPositions,
-                [leaderKey]: toNode,
-              };
+    setPlacements(nextPlacements);
+    setDecks(nextDecks);
+    if (tokenQueue && tokenQueue.length > 1) {
+      tokenQueue.shift();
+      setSelectedSummon({
+        ...selectedSummon,
+        pendingTokens: tokenQueue,
+      });
+    } else {
+      setSelectedSummon(null);
+    }
+    setStatusMessage('');
+    if (finalizeActionOutcome(nextPlacements, leadersPositions)) {
+      return;
+    }
+    toggleTurn();
+  };
 
-              if (wouldTrapSelf(leaderKey, placements, nextPositions)) {
-                setStatusMessage('You cannot move your leader into capture or surround range.');
-                return;
-              }
+  const handleDeckCardClick = (playerKey, cardIndex) => {
+    if (isGameOver) return;
+    if (selectedSummon?.forced) return; // must resolve forced placement first
+    const card = decks[playerKey][cardIndex];
+    if (!card) return;
+    const playerLabel = playerKeyToLabel(playerKey);
+    if (currentTurn !== playerLabel) return;
 
+<<<<<<< HEAD
               setLeadersPositions(nextPositions);
               setStatusMessage('');
               setSelectedLeader(null);
@@ -2380,221 +2004,46 @@ const Board = () => {
             }
             return;
           }
+=======
+    const placedUnits = placements.filter(p => p.playerKey === playerKey && p.deckIndex === cardIndex);
+    const isDual = Boolean(card?.isDual);
+>>>>>>> 95cdfc8d1ddc62fc5555512cd595a13de413f140
 
-          if (selectedUnit) {
-            const fromNode = selectedUnit.nodeId;
-            const toNode = nodeId;
-            if (isNodeEmpty(toNode) && isWithinMoveRange(fromNode, toNode)) {
-              const playerKey = selectedUnit.playerKey;
-              const nextPlacements = placements.map(piece => {
-                if (piece.playerKey === playerKey && piece.deckIndex === selectedUnit.deckIndex) {
-                  return { ...piece, nodeId: toNode };
-                }
-                return piece;
-              });
-              if (wouldTrapSelf(playerKey, nextPlacements, leadersPositions)) {
-                setStatusMessage('Moving that unit would trap your own leader.');
-                return;
-              }
+    // If the card is already deployed (has a boardNodeId), allow selecting its on-board unit
+    if ((card.boardNodeId && !isDual) || (isDual && placedUnits.length > 0)) {
+      const placed = placedUnits[0];
+      if (selectedSummon || canPickFor || hasUnitMoved(playerKey, cardIndex, placed?.tokenId ?? null)) return;
+      if (placed) {
+        const nodeRef = nodes.find(n => n.id === placed.nodeId) || { x: 0, y: 0 };
+        setSelectedUnit({ ...placed, playerKey, player: playerLabel });
+        setSelectedLeader(null);
+        setSelectedSummon(null);
+        setSelectedNode({ id: placed.nodeId, x: nodeRef.x, y: nodeRef.y, image: placed.image });
+      }
+      return;
+    }
 
-              const updatedDeck = decks[playerKey].map((card, idx) => {
-                if (idx !== selectedUnit.deckIndex || !card) return card;
-                if (card.isDual) return card;
-                return { ...card, boardNodeId: toNode };
-              });
+    // Otherwise, prepare to place the card (normal summon selection)
+    const pendingTokens = isDual
+      ? DUAL_TOKEN_SEQUENCE.filter(token => !(card.placedTokens ?? []).includes(token))
+      : null;
+    const requiresMultiPlacement = Boolean(pendingTokens && pendingTokens.length);
+    setSelectedSummon({
+      player: playerLabel,
+      playerKey,
+      cardIndex,
+      image: card.boardImage,
+      forced: requiresMultiPlacement,
+      pendingTokens: requiresMultiPlacement ? pendingTokens : null,
+    });
+  };
 
-              const nextDecks = { ...decks, [playerKey]: updatedDeck };
-
-              setPlacements(nextPlacements);
-              setDecks(nextDecks);
-              setStatusMessage('');
-              setSelectedUnit(null);
-              setSelectedNode(null);
-              markUnitMoved(playerKey, selectedUnit.deckIndex);
-              finalizeActionOutcome(nextPlacements, leadersPositions);
-            }
-            return;
-          }
-        };
-
-        const handlePickCard = (index) => {
-          if (isGameOver) return;
-          if (!canPickFor) return;
-          if (currentTurn !== canPickFor) return;
-          if (bothDecksFull) {
-            setCanPickFor(null);
-            toggleTurn();
-            return;
-          }
-
-          const card = leaders[index];
-          if (!card) return; // no card to pick
-
-          const playerKey = playerLabelToKey(canPickFor);
-          const totalPieces = getPlayerPieceCount(playerKey);
-          if (totalPieces >= 4) {
-            console.warn(`Maximum characters reached for ${canPickFor}`);
-            setCanPickFor(null);
-            toggleTurn();
-            return;
-          }
-
-          const boardImage = getBoardAssetForPlayer(card, playerKey) ?? card;
-          const cardKey = extractPortraitKey(card);
-          const cardInfo = getCardMetaFromAlias(cardKey);
-          const isDual = isDualCharacter(cardKey);
-          const emptySlot = decks[playerKey].findIndex(slot => !slot);
-          if (emptySlot === -1) {
-            console.warn('No empty deck slot available.');
-            setCanPickFor(null);
-            toggleTurn();
-            return;
-          }
-
-          const updatedRetired = retiredCards.includes(card) ? retiredCards : [...retiredCards, card];
-          const cardData = {
-            portrait: card,
-            boardImage,
-            boardNodeId: null,
-            cardKey,
-            abilityType: cardInfo.abilityType,
-            abilityName: cardInfo.abilityName,
-            isDual,
-            placedTokens: [],
-          };
-          setDecks((prev) => {
-            const next = { ...prev };
-            next[playerKey] = next[playerKey].map((slot, idx) => (idx === emptySlot ? cardData : slot));
-            return next;
-          });
-
-          let poolExhausted = false;
-          setLeaders(prev => {
-            const next = [...prev];
-            next[index] = null;
-            const { card: replacement, exhausted } = drawLeaderReplacement(next, updatedRetired);
-            poolExhausted = exhausted;
-            next[index] = replacement;
-            return next;
-          });
-
-          setRetiredCards(updatedRetired);
-          if (poolExhausted) {
-            setStatusMessage('All champions recruited; no further characters available.');
-          }
-
-          setSelectedSummon({
-            player: canPickFor,
-            playerKey,
-            cardIndex: emptySlot,
-            image: boardImage,
-            forced: true,
-            pendingTokens: isDual ? [...DUAL_TOKEN_SEQUENCE] : null,
-          });
-
-          setCanPickFor(null);
-        };
-
-        const attemptPlacement = (node) => {
-          if (isGameOver) return;
-          if (!selectedSummon || !node) return;
-          const { playerKey, cardIndex, pendingTokens } = selectedSummon;
-          const playerLabel = playerKeyToLabel(playerKey);
-
-          if (currentTurn !== playerLabel) return;
-          if (!isValidPlacementNode(playerKey, node)) return;
-          if (!isNodeEmpty(node.id)) return;
-          const tokenQueue = pendingTokens ? [...pendingTokens] : null;
-          const tokenId = tokenQueue?.length ? tokenQueue[0] : null;
-          const nextPlacementRecord = buildPlacementRecord(playerKey, cardIndex, node.id, decks, tokenId);
-          if (!nextPlacementRecord) {
-            console.warn('Failed to build placement record for summon.');
-            return;
-          }
-
-          const nextPlacements = [...placements, nextPlacementRecord];
-
-          if (wouldTrapSelf(playerKey, nextPlacements, leadersPositions)) {
-            setStatusMessage('This placement would trap your own leader. Choose another spot.');
-            return;
-          }
-
-          const nextDecks = {
-            ...decks,
-            [playerKey]: decks[playerKey].map((card, idx) => {
-              if (idx !== cardIndex || !card) return card;
-              if (card.isDual) {
-                const placedTokens = Array.from(new Set([...(card.placedTokens ?? []), tokenId].filter(Boolean)));
-                return { ...card, placedTokens };
-              }
-              return { ...card, boardNodeId: node.id };
-            })
-          };
-
-          setPlacements(nextPlacements);
-          setDecks(nextDecks);
-          if (tokenQueue && tokenQueue.length > 1) {
-            tokenQueue.shift();
-            setSelectedSummon({
-              ...selectedSummon,
-              pendingTokens: tokenQueue,
-            });
-          } else {
-            setSelectedSummon(null);
-          }
-          setStatusMessage('');
-          if (finalizeActionOutcome(nextPlacements, leadersPositions)) {
-            return;
-          }
-          toggleTurn();
-        };
-
-        const handleDeckCardClick = (playerKey, cardIndex) => {
-          if (isGameOver) return;
-          if (selectedSummon?.forced) return; // must resolve forced placement first
-          const card = decks[playerKey][cardIndex];
-          if (!card) return;
-          const playerLabel = playerKeyToLabel(playerKey);
-          if (currentTurn !== playerLabel) return;
-
-          const placedUnits = placements.filter(p => p.playerKey === playerKey && p.deckIndex === cardIndex);
-          const isDual = Boolean(card?.isDual);
-
-          // If the card is already deployed (has a boardNodeId), allow selecting its on-board unit
-          if ((card.boardNodeId && !isDual) || (isDual && placedUnits.length > 0)) {
-            const placed = placedUnits[0];
-            if (selectedSummon || canPickFor || hasUnitMoved(playerKey, cardIndex, placed?.tokenId ?? null)) return;
-            if (placed) {
-              const nodeRef = nodes.find(n => n.id === placed.nodeId) || { x: 0, y: 0 };
-              setSelectedUnit({ ...placed, playerKey, player: playerLabel });
-              setSelectedLeader(null);
-              setSelectedSummon(null);
-              setSelectedNode({ id: placed.nodeId, x: nodeRef.x, y: nodeRef.y, image: placed.image });
-            }
-            return;
-          }
-
-          // Otherwise, prepare to place the card (normal summon selection)
-          const pendingTokens = isDual
-            ? DUAL_TOKEN_SEQUENCE.filter(token => !(card.placedTokens ?? []).includes(token))
-            : null;
-          const requiresMultiPlacement = Boolean(pendingTokens && pendingTokens.length);
-          setSelectedSummon({
-            player: playerLabel,
-            playerKey,
-            cardIndex,
-            image: card.boardImage,
-            forced: requiresMultiPlacement,
-            pendingTokens: requiresMultiPlacement ? pendingTokens : null,
-          });
-        };
-
-        const isWithinHighlight = (node) => {
-          if (!selectedNode) return false;
-          const dx = Math.abs(node.x - selectedNode.x);
-          const dy = Math.abs(node.y - selectedNode.y);
-          return dx <= 1 && dy <= 1;
-        };
+  const isWithinHighlight = (node) => {
+    if (!selectedNode) return false;
+    const dx = Math.abs(node.x - selectedNode.x);
+    const dy = Math.abs(node.y - selectedNode.y);
+    return dx <= 1 && dy <= 1;
+  };
 
   const phaseInfo = useMemo(() => {
     if (isGameOver) {
@@ -2605,7 +2054,6 @@ const Board = () => {
           : 'Victory resolved.'
       };
     }
-    // Merge Phase 3 into Phase 2: both picking and placing are part of Phase 2 now
     if (canPickFor || selectedSummon) {
       return {
         label: 'Phase 2',
@@ -2697,7 +2145,7 @@ const Board = () => {
 
       {/* Center - Board */}
       <div className={`absolute inset-0 flex justify-center items-center pointer-events-none ${boardShiftClass}`}>
-        <div className="relative h-[90vh]">
+        <div className={`relative h-[90vh] transition-transform duration-700 ${isPlayer1Turn ? 'rotate-180' : ''}`}>
             <img 
               src={boardImg} 
               alt="Game Board" 
@@ -2731,7 +2179,7 @@ const Board = () => {
                     hasActiveSelection &&
                     !isCenter &&
                     isWithinHighlight(node) &&
-                    isNodeEmpty(node.id)
+                    isNodeEmpty(node.id, placements, leadersPositions)
                   );
                   const shouldRenderHighlight = isCenter || canMoveHere;
                   const displayImage = shouldRenderHighlight ? selectedNode?.image : nodeImage;
@@ -2775,7 +2223,7 @@ const Board = () => {
                         <img 
                           src={displayImage} 
                           alt="Leader" 
-                          className={`w-full h-full object-cover transition-opacity duration-200 ${opacityClass}`}
+                          className={`w-full h-full object-cover transition-all duration-200 ${opacityClass} ${isPlayer1Turn ? 'rotate-180' : ''}`}
                         />
                       )}
                       {abilityAvailable && placedPiece && (
