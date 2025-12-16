@@ -23,6 +23,17 @@ const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
 const normalizeKey = (value = '') => value.toLowerCase().replace(/[^a-z0-9]/g, '');
 
+const PORTRAIT_MAPPING = {
+  'ancien': 'vieilours',
+  'cuisinier': 'tavernier',
+  'disrupteur': 'geolier',
+  'furie': 'cogneur',
+  'maitredesbetes': 'protecteur',
+  'oracle': 'vizir',
+  'ours': 'ourson',
+  'shifter': 'illusionniste',
+};
+
 export const getBoardImageForAlias = (aliasKey, playerKey) => {
   if (!aliasKey || !playerKey) return null;
   const map = playerKey === 'p1' ? WHITE_CHARACTER_MAP : BLACK_CHARACTER_MAP;
@@ -34,7 +45,8 @@ export const extractPortraitKey = (imageUrl = '') => {
   let base = fileName.replace(/^LEADERS[-_]/i, '');
   base = base.replace(/\.(tif|tiff|png)$/i, '');
   base = base.replace(/[-_]?LQ$/i, '');
-  return normalizeKey(base);
+  const normalized = normalizeKey(base);
+  return PORTRAIT_MAPPING[normalized] ?? normalized;
 };
 
 export const getCardDataByAlias = (aliasKey) => {
