@@ -1,5 +1,32 @@
 const portraits = import.meta.glob('../assets/character_portrait/*.{tif,tiff}', { eager: true, query: '?url', import: 'default' });
 
+const normalizeKey = (value = '') => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const extractKeyFromPortraitPath = (path = '') => {
+    const fileName = path.split('/').pop() ?? '';
+    const withoutExt = fileName.replace(/\.(tif|tiff)$/i, '');
+    const withoutPrefix = withoutExt.replace(/^LEADERS[-_]/i, '');
+    return normalizeKey(withoutPrefix);
+};
+
+const portraitEntries = Object.entries(portraits)
+    .map(([path, url]) => ({ path, url, key: extractKeyFromPortraitPath(path) }))
+    .filter(entry => entry.url);
+
+// Hermit & Cub is a single character card. The cub portrait (ourson) should not be draftable on its own.
+const NON_DRAFTABLE_KEYS = new Set(['ourson']);
+
+const urlToKey = new Map(portraitEntries.map(entry => [entry.url, entry.key]));
+
+const expandDualExcludeKeys = (excludeKeys = new Set()) => {
+    // Hermit and Cub is 1 card: if either is excluded, exclude both.
+    if (excludeKeys.has('ourson') || excludeKeys.has('vieilours')) {
+        excludeKeys.add('ourson');
+        excludeKeys.add('vieilours');
+    }
+    return excludeKeys;
+};
+
 export const getRandomCharacters = (count = 3) => {
     const available = Object.entries(portraits)
         .filter(([path]) => {
@@ -8,7 +35,9 @@ export const getRandomCharacters = (count = 3) => {
             // Actual files are LEADERS-Reine.tif and LEADERS-Roi.tif
             return !path.includes('LEADERS-Reine.tif') && !path.includes('LEADERS-Roi.tif');
         })
-        .map(([, url]) => url)
+        .map(([path, url]) => ({ path, url, key: extractKeyFromPortraitPath(path) }))
+        .filter(({ key }) => !NON_DRAFTABLE_KEYS.has(key))
+        .map(({ url }) => url)
         .filter(url => url); // Ensure no null/undefined values
 
     console.log(`Found ${available.length} characters available for randomization.`);
@@ -32,12 +61,19 @@ export const getRandomCharacters = (count = 3) => {
 };
 
 export const getUniqueRandomCharacter = (excludeList = []) => {
-    const available = Object.entries(portraits)
-        .filter(([path]) => {
-            return !path.includes('LEADERS-Reine.tif') && !path.includes('LEADERS-Roi.tif');
+    const excludeKeys = expandDualExcludeKeys(
+        new Set(excludeList.map((url) => urlToKey.get(url)).filter(Boolean))
+    );
+
+    const available = portraitEntries
+        .filter(({ path, key }) => {
+            if (path.includes('LEADERS-Reine.tif') || path.includes('LEADERS-Roi.tif')) return false;
+            if (NON_DRAFTABLE_KEYS.has(key)) return false;
+            if (excludeKeys.has(key)) return false;
+            return true;
         })
-        .map(([, url]) => url)
-        .filter(url => url && !excludeList.includes(url));
+        .map(({ url }) => url)
+        .filter(url => url);
 
     if (available.length === 0) return null;
     

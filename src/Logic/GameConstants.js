@@ -15,6 +15,9 @@ import blackRoi from '../assets/leader_noir/Leaders_BGA_black_LeaderRoi.png';
 import reinePortrait from '../assets/Q&K_Potrait/LEADERS-Reine.tif?url';
 import roiPortrait from '../assets/Q&K_Potrait/LEADERS-Roi.tif?url';
 
+// Character Portrait Assets
+import hermitPortrait from '../assets/character_portrait/LEADERS-MaitreDesBetes.tif?url';
+
 // Character assets (white)
 import whiteAcrobate from '../assets/character_blanc/Leaders_BGA_white_Acrobate.png';
 import whiteArchere from '../assets/character_blanc/Leaders_BGA_white_Archere.png';
@@ -56,6 +59,7 @@ import blackVizir from '../assets/character_noir/Leaders_BGA_black_Vizir.png';
 export {
     whiteReine, whiteRoi, blackReine, blackRoi,
     reinePortrait, roiPortrait,
+  hermitPortrait,
     boardImg, bgImg, blankCardImg
 };
 
@@ -125,7 +129,17 @@ export const BOARD_COMPATIBLE_KEYS = new Set([
   ...Object.keys(WHITE_CHARACTER_MAP),
   ...Object.keys(BLACK_CHARACTER_MAP),
 ]);
-export const IMPLEMENTED_ACTIVE_ABILITIES = new Set(['acrobate', 'cavalier', 'manipulatrice', 'garderoyal', 'lancegrappin', 'tavernier']);
+export const IMPLEMENTED_ACTIVE_ABILITIES = new Set([
+  'acrobate',
+  'cavalier',
+  'manipulatrice',
+  'garderoyal',
+  'lancegrappin',
+  'tavernier',
+  'cogneur',
+  'illusionniste',
+  'rodeuse',
+]);
 
 export const MAX_DECK_SIZE = 4;
 export const DECK_INDEXES = Array.from({ length: MAX_DECK_SIZE }, (_, idx) => idx);

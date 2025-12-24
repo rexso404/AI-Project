@@ -15,7 +15,8 @@ import {
   CHARACTER_ALIAS_MAP,
   CHARACTER_DATA_MAP,
   whiteReine, whiteRoi, blackReine, blackRoi,
-  reinePortrait, roiPortrait
+  reinePortrait, roiPortrait,
+  hermitPortrait
 } from './GameConstants';
 
 const nodes = getBoardNodes();
@@ -24,11 +25,11 @@ const nodeMap = new Map(nodes.map(n => [n.id, n]));
 const normalizeKey = (value = '') => value.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 const PORTRAIT_MAPPING = {
-  'ancien': 'vieilours',
+  'ancien': 'protecteur',
   'cuisinier': 'tavernier',
   'disrupteur': 'geolier',
-  'furie': 'cogneur',
-  'maitredesbetes': 'protecteur',
+  'furie': 'rodeuse',
+  'maitredesbetes': 'vieilours',
   'oracle': 'vizir',
   'ours': 'ourson',
   'shifter': 'illusionniste',
@@ -77,6 +78,13 @@ export const getCardMetaFromAlias = (aliasKey) => {
 
 export const isDualCharacter = (cardKey) => DUAL_CARD_KEYS.has(cardKey);
 
+// Hermit & Cub is a single character card. Use a single canonical key so it can't appear doubled.
+const canonicalizeDualCardKey = (cardKey) => {
+  if (!cardKey) return cardKey;
+  if (!DUAL_CARD_KEYS.has(cardKey)) return cardKey;
+  return cardKey === 'ourson' ? 'vieilours' : cardKey;
+};
+
 export const buildEmptyDecks = () => ({
   p1: Array(MAX_DECK_SIZE).fill(null),
   p2: Array(MAX_DECK_SIZE).fill(null),
@@ -88,9 +96,12 @@ export const hydrateDecks = (rawDecks = buildEmptyDecks()) => {
     hydrated[playerKey] = DECK_INDEXES.map((idx) => {
       const card = rawDecks?.[playerKey]?.[idx];
       if (!card) return null;
-      const portrait = card.portrait ?? card.boardImage ?? '';
-      const meta = card.cardKey ? { cardKey: card.cardKey } : getCardMetaFromPortrait(portrait);
-      const aliasKey = meta.cardKey || card.cardKey || extractPortraitKey(portrait);
+      const rawPortrait = card.portrait ?? card.boardImage ?? '';
+      const meta = card.cardKey ? { cardKey: card.cardKey } : getCardMetaFromPortrait(rawPortrait);
+      const aliasKey = canonicalizeDualCardKey(meta.cardKey || card.cardKey || extractPortraitKey(rawPortrait));
+
+      // Hermit & Cub should always display the Hermit portrait (even for older saved games).
+      const portrait = aliasKey === 'vieilours' ? hermitPortrait : rawPortrait;
       const resolvedBoardImage = card.boardImage ?? getBoardImageForAlias(aliasKey, playerKey) ?? portrait;
       const aliasMeta = getCardMetaFromAlias(aliasKey);
       return {
@@ -113,10 +124,10 @@ export const getAliasFromBoardImage = (imageSrc) => BOARD_IMAGE_ALIAS_MAP[imageS
 export const sanitizePlacements = (rawPlacements = [], deckSnapshot = buildEmptyDecks()) => rawPlacements.map((piece) => {
   if (!piece) return piece;
   const deckCard = deckSnapshot?.[piece.playerKey]?.[piece.deckIndex];
-  const inferredAlias = piece.cardKey
+  const inferredAlias = canonicalizeDualCardKey(piece.cardKey
     || deckCard?.cardKey
     || getAliasFromBoardImage(piece.image)
-    || extractPortraitKey(piece.portrait ?? '');
+    || extractPortraitKey(piece.portrait ?? ''));
   const aliasMeta = getCardMetaFromAlias(inferredAlias);
   return {
     ...piece,
@@ -131,7 +142,7 @@ export const sanitizePlacements = (rawPlacements = [], deckSnapshot = buildEmpty
 export const buildPlacementRecord = (playerKey, deckIndex, nodeId, decksSnapshot, tokenId = null) => {
   const deckCard = decksSnapshot?.[playerKey]?.[deckIndex];
   if (!deckCard) return null;
-  const aliasKey = deckCard.cardKey ?? extractPortraitKey(deckCard.portrait ?? '');
+  const aliasKey = canonicalizeDualCardKey(deckCard.cardKey ?? extractPortraitKey(deckCard.portrait ?? ''));
   const aliasMeta = getCardMetaFromAlias(aliasKey);
   const specializedImage = tokenId && DUAL_TOKEN_ASSETS[playerKey]?.[tokenId]
     ? DUAL_TOKEN_ASSETS[playerKey][tokenId]
@@ -164,8 +175,9 @@ export const createGameLeaders = () => {
     p1: buildLeader('white', isReineP1),
     p2: buildLeader('black', !isReineP1),
   };
-  const firstPlayerKey = leaders.p1.role === 'roi' ? 'p1' : 'p2';
 
+  // Turn order: Roi always starts, then Reine.
+  const firstPlayerKey = leaders.p1.role === 'roi' ? 'p1' : 'p2';
   return { leaders, firstPlayerKey };
 };
 
@@ -330,29 +342,75 @@ export const evaluateLeaderState = (playerKey, placementsState, leaderPositionsS
   const leaderNodeId = leaderPositionsState[playerKey];
   const adjacentIds = getAdjacentNodeIds(nodes, leaderNodeId);
   const enemyKey = playerKey === 'p1' ? 'p2' : 'p1';
-  let enemyCount = 0;
   let allOccupied = adjacentIds.length > 0;
   let hasAssassinAdjacent = false;
-  let otherAlliesAdjacent = 0;
+
+  const leaderNode = nodeMap.get(leaderNodeId);
+  const archerContributesFromRange = (archerNodeId) => {
+    if (!leaderNode) return false;
+    const archerNode = nodeMap.get(archerNodeId);
+    if (!archerNode) return false;
+
+    const dx = archerNode.x - leaderNode.x;
+    const dy = archerNode.y - leaderNode.y;
+    const sameCol = Math.abs(dx) <= FLOAT_TOLERANCE;
+    const sameRow = Math.abs(dy) <= FLOAT_TOLERANCE;
+    if (!sameCol && !sameRow) return false;
+
+    // Exactly 2 spaces away in a straight line.
+    const distance = sameCol ? Math.abs(dy) : Math.abs(dx);
+    if (Math.abs(distance - 2) > FLOAT_TOLERANCE) return false;
+
+    // Ensure the intermediate node exists on the board.
+    const stepX = sameRow ? (dx === 0 ? 0 : dx > 0 ? 1 : -1) : 0;
+    const stepY = sameCol ? (dy === 0 ? 0 : dy > 0 ? 1 : -1) : 0;
+    const mid = findNodeByCoordinates(nodes, leaderNode.x + stepX, leaderNode.y + stepY);
+    return Boolean(mid);
+  };
+
+  // Count "capture contributors": adjacent enemy characters (including enemy Leader),
+  // plus enemy Archer at range 2. Archer does NOT contribute when adjacent.
+  let captureContributors = 0;
 
   adjacentIds.forEach(id => {
     const occupant = getNodeOccupant(id, leaderPositionsState, placementsState);
     if (!occupant) {
       allOccupied = false;
-    } else if (occupant.playerKey === enemyKey && occupant.type !== 'leader') {
-      enemyCount += 1;
+    } else if (occupant.playerKey === enemyKey) {
+      // Hermit+Cub: the Cub cannot help capture the opponent's Leader.
+      if (occupant.type === 'unit' && occupant.tokenId === 'cub') {
+        return;
+      }
+
+      if (occupant.type === 'leader') {
+        captureContributors += 1;
+        return;
+      }
+
+      // Units
       if (occupant.cardKey === 'assassin') {
         hasAssassinAdjacent = true;
-      } else {
-        otherAlliesAdjacent += 1;
+        captureContributors += 1;
+        return;
+      }
+
+      // Archer does not help capture when adjacent.
+      if (occupant.cardKey !== 'archere') {
+        captureContributors += 1;
       }
     }
   });
 
-  let captured = enemyCount >= 2;
-  if (!captured && hasAssassinAdjacent && otherAlliesAdjacent === 0) {
-    captured = true;
-  }
+  // Archer can contribute from 2 spaces away in a straight line (no visibility required).
+  placementsState.forEach((piece) => {
+    if (piece.playerKey !== enemyKey) return;
+    if (piece.cardKey !== 'archere') return;
+    if (archerContributesFromRange(piece.nodeId)) {
+      captureContributors += 1;
+    }
+  });
+
+  const captured = captureContributors >= 2 || hasAssassinAdjacent;
 
   return {
     captured,
