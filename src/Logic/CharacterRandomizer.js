@@ -4,9 +4,24 @@ const normalizeKey = (value = '') => value.toLowerCase().replace(/[^a-z0-9]/g, '
 
 const extractKeyFromPortraitPath = (path = '') => {
     const fileName = path.split('/').pop() ?? '';
-    const withoutExt = fileName.replace(/\.(tif|tiff)$/i, '');
+    let withoutExt = fileName.replace(/\.(tif|tiff)$/i, '');
+    withoutExt = withoutExt.replace(/[-_]?LQ$/i, '');
     const withoutPrefix = withoutExt.replace(/^LEADERS[-_]/i, '');
-    return normalizeKey(withoutPrefix);
+    let key = normalizeKey(withoutPrefix);
+
+    // Mapping for inconsistent filenames
+    const PORTRAIT_MAPPING = {
+        'ancien': 'protecteur',
+        'cuisinier': 'tavernier',
+        'disrupteur': 'geolier',
+        'furie': 'rodeuse',
+        'maitredesbetes': 'vieilours',
+        'oracle': 'vizir',
+        'ours': 'ourson',
+        'shifter': 'illusionniste',
+    };
+
+    return PORTRAIT_MAPPING[key] ?? key;
 };
 
 const portraitEntries = Object.entries(portraits)
