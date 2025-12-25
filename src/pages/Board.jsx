@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { getBoardNodes } from '../Logic/Board';
+import { GameAI } from '../Logic/GameAI';
 import {
   boardImg,
   bgImg,
@@ -45,7 +46,7 @@ import CardSlot from '../components/CardSlot.jsx';
 import RecruitOptionCard from '../components/RecruitOptionCard.jsx';
 import AbilityTooltip from '../components/AbilityTooltip.jsx';
 
-const Board = () => {
+const Board = ({ gameMode = 'player' }) => {
   const nodes = useMemo(() => getBoardNodes(), []);
   
   // Derived node maps for quick lookup
@@ -163,6 +164,286 @@ const Board = () => {
   const boardShiftClass = '-translate-x-48';
   const playerDeckShiftClass = bothDecksFull ? '-translate-x-12' : '';
   const isPlayer1Turn = currentTurn === 'Player 1';
+
+  // --- AI Integration ---
+  useEffect(() => {
+    if (gameMode === 'ai' && currentTurn === 'Player 2' && !isGameOver) {
+      // AI Turn
+      const ai = new GameAI({
+        leaders,
+        decks,
+        placements,
+        leadersPositions,
+        currentTurn,
+        movementTracker,
+        retiredCards,
+        recruitPickRemaining
+      });
+
+      // Small delay for realism
+      const timer = setTimeout(() => {
+        const move = ai.decideMove('p2');
+        if (move) {
+          executeAIMove(move);
+        } else {
+          // Fallback if no move found (e.g. stuck), just end turn to prevent freeze
+          console.warn("AI found no valid move. Skipping turn.");
+          toggleTurn();
+        }
+      }, 1000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [currentTurn, gameMode, isGameOver, leaders, decks, placements, leadersPositions, movementTracker, recruitPickRemaining]);
+
+  const executeAIMove = (move) => {
+    console.log("Executing AI Move:", move);
+
+    if (move.type === 'RECRUIT') {
+      // 1. Find empty slot in deck
+      const emptySlot = decks.p2.findIndex(c => c === null);
+      if (emptySlot === -1) {
+        console.warn("AI tried to recruit but deck is full.");
+        toggleTurn();
+        return;
+      }
+
+      // 2. Get the card
+      const card = leaders[move.index];
+      if (!card) {
+        console.warn("AI tried to recruit invalid card.");
+        toggleTurn();
+        return;
+      }
+
+      // 3. Add card to retired list (so it won't appear again)
+      const updatedRetired = retiredCards.includes(card) ? retiredCards : [...retiredCards, card];
+      setRetiredCards(updatedRetired);
+
+      // 4. Determine Placement (Simple Heuristic: First valid spot in back row)
+      const validNodes = nodes.filter(n => isValidPlacementNode('p2', n) && isNodeEmpty(n.id, placements, leadersPositions));
+      
+      if (validNodes.length === 0) {
+        console.warn("AI has no space to place recruited unit.");
+        toggleTurn();
+        return;
+      }
+
+      // Pick random valid node
+      const targetNode = validNodes[Math.floor(Math.random() * validNodes.length)];
+      
+      // 5. Update Leaders pool - remove recruited card and draw replacement
+      setLeaders(prev => {
+        const next = [...prev];
+        next[move.index] = null;
+        const { card: replacement } = drawLeaderReplacement(next, updatedRetired);
+        next[move.index] = replacement;
+        return next;
+      });
+
+      // Handle Dual Token (Hermit & Cub)
+      const isDual = isDualCharacter(extractPortraitKey(card));
+      const tokenSequence = isDual ? [...DUAL_TOKEN_SEQUENCE] : [null];
+
+      let currentPlacements = [...placements];
+      let currentDecks = { ...decks };
+      let currentLeadersPositions = { ...leadersPositions };
+
+      // Place tokens
+      tokenSequence.forEach((tokenId, idx) => {
+        // For second token, find another valid spot
+        let placementNode = targetNode;
+        if (idx > 0) {
+             const remainingNodes = nodes.filter(n => 
+                isValidPlacementNode('p2', n) && 
+                isNodeEmpty(n.id, currentPlacements, currentLeadersPositions) &&
+                n.id !== targetNode.id
+             );
+             if (remainingNodes.length > 0) {
+                 placementNode = remainingNodes[Math.floor(Math.random() * remainingNodes.length)];
+             }
+        }
+
+        // Update Deck
+        currentDecks = {
+            ...currentDecks,
+            p2: currentDecks.p2.map((c, i) => {
+                if (i !== emptySlot) return c;
+                // If it's the first time we are adding the card to the deck
+                const aliasKey = extractPortraitKey(card);
+                const boardImage = getBoardAssetForPlayer(card, 'p2');
+                const newCard = c || { 
+                    ...getCardMetaFromAlias(aliasKey), 
+                    portrait: card, 
+                    boardImage: boardImage,
+                    cardKey: aliasKey,
+                    isDual 
+                };
+                
+                if (isDual) {
+                    const placedTokens = Array.from(new Set([...(newCard.placedTokens ?? []), tokenId].filter(Boolean)));
+                    return { ...newCard, placedTokens };
+                }
+                return { ...newCard, boardNodeId: placementNode.id };
+            })
+        };
+
+        const placementRecord = buildPlacementRecord('p2', emptySlot, placementNode.id, currentDecks, tokenId);
+        
+        // Update Placements
+        if (placementRecord) {
+            currentPlacements = [...currentPlacements, placementRecord];
+        }
+      });
+
+      setPlacements(currentPlacements);
+      setDecks(currentDecks);
+      
+      // Check Win Condition
+      if (finalizeActionOutcome(currentPlacements, currentLeadersPositions)) return;
+
+      // Handle Turn Switch
+      // If AI has picks remaining (Reine bonus), it might want to pick again.
+      // But Minimax currently returns 1 move.
+      // For simplicity, we just toggle turn after 1 recruit.
+      // Unless we want to support double recruit.
+      // Let's stick to single recruit for now.
+      toggleTurn();
+
+    } else if (move.type === 'MOVE_LEADER') {
+        const newPositions = { ...leadersPositions, p2: move.to };
+        setLeadersPositions(newPositions);
+        markLeaderMoved('p2');
+        
+        if (finalizeActionOutcome(placements, newPositions)) return;
+        
+        // Nemesis Reaction
+        if (startNemesisReactionIfNeeded('p2', placements, newPositions)) {
+            // If Nemesis triggers, we need to handle it.
+            // For AI, we should probably auto-resolve Nemesis too?
+            // Or let the player handle their Nemesis if they have one.
+            // If AI has Nemesis, it needs to move.
+            // `startNemesisReactionIfNeeded` sets `abilityContext`.
+            // If it's AI's Nemesis, we need to handle it.
+            // But `startNemesisReactionIfNeeded` sets UI state.
+            // We might need a separate AI handler for reaction.
+            // For now, let's assume `startNemesisReactionIfNeeded` works for UI.
+            // If AI triggers Player's Nemesis, Player needs to move.
+            // If AI triggers AI's Nemesis (impossible since it's AI turn moving AI leader),
+            // Wait, Nemesis moves when OPPONENT leader moves.
+            // So if AI moves AI Leader, Player's Nemesis might trigger.
+            // That's fine, `startNemesisReactionIfNeeded` will set UI for Player to move.
+        } else {
+            endPhase();
+        }
+
+    } else if (move.type === 'MOVE_UNIT') {
+        const updatedPlacements = placements.map(p => {
+            if (p.nodeId === move.unitId) {
+                return { ...p, nodeId: move.to };
+            }
+            return p;
+        });
+        
+        setPlacements(updatedPlacements);
+        
+        // Update Deck boardNodeId reference
+        const unit = placements.find(p => p.nodeId === move.unitId);
+        if (unit) {
+             markUnitMoved('p2', unit.deckIndex, unit.tokenId);
+             setDecks(prev => ({
+                ...prev,
+                p2: prev.p2.map((c, i) => {
+                    if (i !== unit.deckIndex || !c) return c;
+                    if (c.isDual) return c; // Duals don't track single boardNodeId
+                    return { ...c, boardNodeId: move.to };
+                })
+             }));
+        }
+
+        if (finalizeActionOutcome(updatedPlacements, leadersPositions)) return;
+        endPhase();
+
+    } else if (move.type === 'USE_ABILITY') {
+        let updatedPlacements = [...placements];
+        let unitToMark = null;
+
+        // Find the unit using the ability
+        const unitIndex = updatedPlacements.findIndex(p => p.nodeId === move.unitId);
+        if (unitIndex !== -1) {
+            unitToMark = updatedPlacements[unitIndex];
+        }
+
+        if (['acrobate', 'cavalier', 'garderoyal', 'rodeuse'].includes(move.ability)) {
+            // Simple Move
+            if (unitIndex !== -1) {
+                updatedPlacements[unitIndex] = { ...updatedPlacements[unitIndex], nodeId: move.to };
+            }
+        }
+        else if (['manipulatrice', 'tavernier', 'cogneur'].includes(move.ability)) {
+            // Move Target
+            const targetIndex = updatedPlacements.findIndex(p => p.nodeId === move.targetId);
+            if (targetIndex !== -1) {
+                updatedPlacements[targetIndex] = { ...updatedPlacements[targetIndex], nodeId: move.to };
+            }
+        }
+        else if (move.ability === 'lancegrappin') {
+            if (move.subType === 'move_self') {
+                if (unitIndex !== -1) {
+                    updatedPlacements[unitIndex] = { ...updatedPlacements[unitIndex], nodeId: move.to };
+                }
+            } else if (move.subType === 'drag_target') {
+                const targetIndex = updatedPlacements.findIndex(p => p.nodeId === move.targetId);
+                if (targetIndex !== -1) {
+                    updatedPlacements[targetIndex] = { ...updatedPlacements[targetIndex], nodeId: move.to };
+                }
+            }
+        }
+        else if (move.ability === 'illusionniste') {
+            // Swap
+            const targetIndex = updatedPlacements.findIndex(p => p.nodeId === move.targetId);
+            if (unitIndex !== -1 && targetIndex !== -1) {
+                const unitPos = updatedPlacements[unitIndex].nodeId;
+                const targetPos = updatedPlacements[targetIndex].nodeId;
+                
+                updatedPlacements[unitIndex] = { ...updatedPlacements[unitIndex], nodeId: targetPos };
+                updatedPlacements[targetIndex] = { ...updatedPlacements[targetIndex], nodeId: unitPos };
+            }
+        }
+
+        setPlacements(updatedPlacements);
+
+        // Mark unit as moved (Action used)
+        if (unitToMark) {
+            markUnitMoved('p2', unitToMark.deckIndex, unitToMark.tokenId);
+            
+            // Update Deck boardNodeId if unit moved (for consistency)
+            if (['acrobate', 'cavalier', 'garderoyal', 'rodeuse'].includes(move.ability) || (move.ability === 'lancegrappin' && move.subType === 'move_self')) {
+                 setDecks(prev => ({
+                    ...prev,
+                    p2: prev.p2.map((c, i) => {
+                        if (i !== unitToMark.deckIndex || !c) return c;
+                        if (c.isDual) return c;
+                        return { ...c, boardNodeId: move.to };
+                    })
+                 }));
+            }
+            else if (move.ability === 'illusionniste') {
+                 setDecks(prev => ({
+                    ...prev,
+                    p2: prev.p2.map((c, i) => {
+                        if (i !== unitToMark.deckIndex || !c) return c;
+                        if (c.isDual) return c;
+                        return { ...c, boardNodeId: move.targetId };
+                    })
+                 }));
+            }
+        }
+
+        if (finalizeActionOutcome(updatedPlacements, leadersPositions)) return;
+        endPhase();
+    }
+  };
 
   // Helper Wrappers
   const hasLeaderMoved = (playerKey) => Boolean(movementTracker[playerKey]?.leader);

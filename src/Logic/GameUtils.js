@@ -329,13 +329,13 @@ export const getAdjacentNodeIds = (nodesList, nodeId) => {
 export const getNodeOccupant = (nodeId, leaderPositionsState, placementsState) => {
   if (leaderPositionsState.p1 === nodeId) return { type: 'leader', playerKey: 'p1' };
   if (leaderPositionsState.p2 === nodeId) return { type: 'leader', playerKey: 'p2' };
-  const unit = placementsState.find(piece => piece.nodeId === nodeId);
+  const unit = placementsState.find(piece => piece && piece.nodeId === nodeId);
   return unit ? { ...unit, type: 'unit' } : null;
 };
 
 export const isNodeEmpty = (nodeId, placementsState, leaderPositionsState) => {
   if (leaderPositionsState.p1 === nodeId || leaderPositionsState.p2 === nodeId) return false;
-  return !placementsState.some(piece => piece.nodeId === nodeId);
+  return !placementsState.some(piece => piece && piece.nodeId === nodeId);
 };
 
 export const evaluateLeaderState = (playerKey, placementsState, leaderPositionsState) => {
@@ -403,6 +403,7 @@ export const evaluateLeaderState = (playerKey, placementsState, leaderPositionsS
 
   // Archer can contribute from 2 spaces away in a straight line (no visibility required).
   placementsState.forEach((piece) => {
+    if (!piece) return;
     if (piece.playerKey !== enemyKey) return;
     if (piece.cardKey !== 'archere') return;
     if (archerContributesFromRange(piece.nodeId)) {
