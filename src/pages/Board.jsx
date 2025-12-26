@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getBoardNodes } from '../Logic/Board';
 import { GameAI } from '../Logic/GameAI';
 import { getBestMove } from '../Logic/Minimax';
+import { getRecruitmentValue, getDynamicWeight } from '../Logic/AIWeights';
 import {
   boardImg,
   bgImg,
@@ -2266,14 +2267,33 @@ const Board = ({ gameMode = 'player' }) => {
           .filter(({ leader }) => leader !== null);
 
         if (availableLeaders.length > 0) {
-          // Simple heuristic: pick first available leader
-          const chosenIdx = availableLeaders[0].idx;
-          console.log(`[AI ORCHESTRATION] Recruiting card at index ${chosenIdx}`);
+          // Get enemy deck for dynamic weight calculation
+          const enemyDeck = decks.p1 || [];
+          
+          // Calculate weighted value for each available leader
+          const weightedLeaders = availableLeaders.map(({ leader, idx }) => {
+            const cardKey = leader?.cardKey || extractPortraitKey(leader);
+            // Use recruitment value (handles special cases like Hermit & Cub)
+            const baseValue = getRecruitmentValue(cardKey);
+            // Apply dynamic adjustments based on enemy composition
+            const dynamicValue = getDynamicWeight(cardKey, enemyDeck);
+            // Combined score (average of base recruitment and dynamic)
+            const score = (baseValue + dynamicValue) / 2;
+            return { leader, idx, cardKey, score };
+          });
+          
+          // Sort by score descending and pick the best
+          weightedLeaders.sort((a, b) => b.score - a.score);
+          const bestChoice = weightedLeaders[0];
+          
+          console.log(`[AI ORCHESTRATION] Recruitment evaluation:`, 
+            weightedLeaders.map(l => `${l.cardKey}: ${l.score.toFixed(1)}`).join(', '));
+          console.log(`[AI ORCHESTRATION] Recruiting best card: ${bestChoice.cardKey} (score: ${bestChoice.score.toFixed(1)}) at index ${bestChoice.idx}`);
           
           // Use executeAIMove which has complete recruitment logic
           // (updates deck, placements, board position, etc.)
           if (executeAIMoveRef.current) {
-            executeAIMoveRef.current({ type: 'RECRUIT', index: chosenIdx });
+            executeAIMoveRef.current({ type: 'RECRUIT', index: bestChoice.idx });
           }
           // executeAIMove will handle setAiThinking(false) or end turn
         } else {
