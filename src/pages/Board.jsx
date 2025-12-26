@@ -1,9 +1,5 @@
-<<<<<<< HEAD
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-=======
-import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
->>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
 import { getBoardNodes } from '../Logic/Board';
 import { GameAI } from '../Logic/GameAI';
 import { getBestMove } from '../Logic/Minimax';
@@ -54,12 +50,9 @@ import RecruitOptionCard from '../components/RecruitOptionCard.jsx';
 import AbilityTooltip from '../components/AbilityTooltip.jsx';
 
 const Board = ({ gameMode = 'player' }) => {
-<<<<<<< HEAD
   const TURN_TIME_SECONDS = 5 * 60;
   const MOVE_BONUS_SECONDS = 20;
-=======
   const navigate = useNavigate();
->>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
   const nodes = useMemo(() => getBoardNodes(), []);
   
   // Derived node maps for quick lookup
@@ -194,7 +187,6 @@ const Board = ({ gameMode = 'player' }) => {
   const playerDeckShiftClass = bothDecksFull ? '-translate-x-12' : '';
   const isPlayer1Turn = currentTurn === 'Player 1';
 
-<<<<<<< HEAD
   const formatClock = (seconds) => {
     const safe = Math.max(0, Math.floor(Number(seconds) || 0));
     const mm = String(Math.floor(safe / 60)).padStart(2, '0');
@@ -208,7 +200,6 @@ const Board = ({ gameMode = 'player' }) => {
     }
     return playerLabelToKey(currentTurn);
   }, [abilityContext, currentTurn]);
-=======
   // --- AI State ---
   const [aiThinking, setAiThinking] = useState(false);
   
@@ -221,7 +212,6 @@ const Board = ({ gameMode = 'player' }) => {
   const executeAIMoveRef = useRef(null);
   const handleAITurnEndRef = useRef(null);
   const handleAIPostActionsRef = useRef(null);
->>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
 
   function grantMoveBonus(playerKey) {
     if (!playerKey) return;
@@ -269,12 +259,9 @@ const Board = ({ gameMode = 'player' }) => {
         return;
       }
 
-<<<<<<< HEAD
       // Pick random valid node
       // Pick a deterministic valid node to keep renders/analysis stable.
-=======
       // Pick first valid node (deterministic for React strict mode)
->>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
       const targetNode = validNodes[0];
       
       // 5. Update Leaders pool - remove recruited card and draw replacement
@@ -307,11 +294,7 @@ const Board = ({ gameMode = 'player' }) => {
                        n.id !== targetNode.id;
              });
              if (remainingNodes.length > 0) {
-<<<<<<< HEAD
-               placementNode = remainingNodes[0];
-=======
                  placementNode = remainingNodes[0];
->>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
              }
         }
 
@@ -383,63 +366,25 @@ const Board = ({ gameMode = 'player' }) => {
       }
 
     } else if (move.type === 'MOVE_LEADER') {
-        const newPositions = { ...leadersPositions, p2: move.to };
-        setLeadersPositions(newPositions);
-<<<<<<< HEAD
-        markLeaderMoved('p2');
-
+      const newPositions = { ...leadersPositions, p2: move.to };
+      setLeadersPositions(newPositions);
+      markLeaderMoved('p2');
       grantMoveBonus('p2');
-        
-        if (finalizeActionOutcome(placements, newPositions)) return;
-        
-        // Nemesis Reaction
-        if (startNemesisReactionIfNeeded('p2', placements, newPositions)) {
-        // Pause AI phase resolution until the forced Nemesis reaction is completed.
+      aiActionRef.current.moveCount += 1;
+
+      if (finalizeActionOutcome(placements, newPositions)) return;
+
+      // Nemesis reaction (opponent moves when leader moves). Pause AI continuation until resolved.
+      if (startNemesisReactionIfNeeded('p2', placements, newPositions)) {
         setPendingForcedResume({
           type: 'nemesis',
           resumeTurnLabel: currentTurn,
         });
-            // If Nemesis triggers, we need to handle it.
-            // For AI, we should probably auto-resolve Nemesis too?
-            // Or let the player handle their Nemesis if they have one.
-            // If AI has Nemesis, it needs to move.
-            // `startNemesisReactionIfNeeded` sets `abilityContext`.
-            // If it's AI's Nemesis, we need to handle it.
-            // But `startNemesisReactionIfNeeded` sets UI state.
-            // We might need a separate AI handler for reaction.
-            // For now, let's assume `startNemesisReactionIfNeeded` works for UI.
-            // If AI triggers Player's Nemesis, Player needs to move.
-            // If AI triggers AI's Nemesis (impossible since it's AI turn moving AI leader),
-            // Wait, Nemesis moves when OPPONENT leader moves.
-            // So if AI moves AI Leader, Player's Nemesis might trigger.
-            // That's fine, `startNemesisReactionIfNeeded` will set UI for Player to move.
-        } else {
-            endPhase();
-=======
-        // Inline markLeaderMoved
-        setMovementTracker((prev) => ({
-          ...prev,
-          p2: { ...prev.p2, leader: true },
-        }));
-        // Update moveCount
-        aiActionRef.current.moveCount += 1;
-        
-        // Inline finalizeActionOutcome
-        const outcome = determineGameOutcome(placements, newPositions);
-        if (outcome) {
-          setGameResult(outcome);
-          setStatusMessage('');
-          setSelectedLeader(null);
-          setSelectedUnit(null);
-          setSelectedSummon(null);
-          setCanPickFor(null);
-          return;
->>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
-        }
-        
-        // Nemesis Reaction - handled by actual function later, skip for now
-        // AI will continue in useEffect after state updates
-        setAiThinking(false); // Allow useEffect to check for more moves
+        return;
+      }
+
+      // Allow the AI orchestration effect to schedule the next action.
+      setAiThinking(false);
 
     } else if (move.type === 'MOVE_UNIT') {
         const updatedPlacements = placements.map(p => {
@@ -2306,7 +2251,6 @@ const Board = ({ gameMode = 'player' }) => {
     setSelectedSummon(null);
     resetMovementTracker();
     setStatusMessage('');
-<<<<<<< HEAD
   }
 
   function handleTurnTimeout(ownerKey) {
@@ -2403,10 +2347,11 @@ const Board = ({ gameMode = 'player' }) => {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [abilityContext, currentTurn, gameMode, isGameOver, leaders, decks, placements, leadersPositions, movementTracker, recruitPickRemaining, retiredCards]);
-=======
-    aiActionRef.current.moveCount = 0; // Reset AI move count on turn change
-  };
->>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
+
+  // Reset AI move counter when the turn changes.
+  useEffect(() => {
+    aiActionRef.current.moveCount = 0;
+  }, [currentTurn]);
 
   const endPhase = () => {
     if (isGameOver) return;
@@ -3423,7 +3368,6 @@ const Board = ({ gameMode = 'player' }) => {
               </div>
               <div className="flex gap-3">
                 {DECK_INDEXES.map(idx => {
-                  <span className="text-cyan-400 font-bold text-2xl drop-shadow-md tracking-wide">Player 2 Deck ({decks.p2.filter(Boolean).length})</span>
                   const card = decks.p2[idx];
                   const cardPlacements = placements.filter(p => p.playerKey === 'p2' && p.deckIndex === idx);
                   const deployed = cardPlacements.length > 0;
