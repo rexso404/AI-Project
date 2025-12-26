@@ -21,9 +21,182 @@ import {
     getWandererDestinations
 } from './AbilityUtils';
 
+// Dangerous ability categories for threat assessment
+const HIGH_THREAT_ABILITIES = ['assassin', 'lancegrappin', 'manipulatrice', 'illusionniste', 'cogneur'];
+const MOBILE_ABILITIES = ['cavalier', 'acrobate', 'rodeuse', 'garderoyal'];
+const PASSIVE_THREAT_ABILITIES = ['geolier', 'archere', 'nemesis'];
+
 const NODES = getBoardNodes();
-const MAX_DEPTH = 3; // Optimal depth for web
+const NODE_MAP = new Map(NODES.map(n => [n.id, n]));
+const MAX_DEPTH = 4; // Optimal depth for web
 const INFINITY = 1000000;
+
+// =========================================================================
+// CHECKMATE DETECTION HELPERS
+// =========================================================================
+
+/**
+ * Calculate how many units can reach a target node in N moves
+ * @param {number} targetNodeId - The node to check threats against
+ * @param {string} threatPlayerKey - The player whose units we're checking
+ * @param {Array} placements - Current board placements
+ * @param {Object} leadersPositions - Leader positions
+ * @param {number} maxMoves - Maximum moves to consider (1 or 2)
+ */
+const countThreatsToNode = (targetNodeId, threatPlayerKey, placements, leadersPositions, maxMoves = 1) => {
+    let threatCount = 0;
+    const threatUnits = [];
+    
+    const enemyUnits = placements.filter(p => p.playerKey === threatPlayerKey);
+    
+    enemyUnits.forEach(unit => {
+        const unitNode = NODE_MAP.get(unit.nodeId);
+        if (!unitNode) return;
+        
+        // Check if unit can reach target in 1 move
+        const adjacents = getAdjacentNodeIds(NODES, unit.nodeId);
+        if (adjacents.includes(targetNodeId)) {
+            threatCount++;
+            threatUnits.push({ ...unit, movesAway: 1 });
+            return;
+        }
+        
+        // Check special abilities for 1-move reach
+        if (unit.cardKey === 'acrobate') {
+            const jumps = getAcrobatLandingOptions(unit.nodeId, placements, leadersPositions);
+            if (jumps.some(j => j.nodeId === targetNodeId)) {
+                threatCount++;
+                threatUnits.push({ ...unit, movesAway: 1, ability: 'acrobate' });
+                return;
+            }
+        }
+        else if (unit.cardKey === 'cavalier') {
+            const dashes = getRiderLandingOptions(unit.nodeId, placements, leadersPositions);
+            if (dashes.includes(targetNodeId)) {
+                threatCount++;
+                threatUnits.push({ ...unit, movesAway: 1, ability: 'cavalier' });
+                return;
+            }
+        }
+        
+        // Check 2-move threats if requested
+        if (maxMoves >= 2) {
+            // Standard 2-step move check
+            for (const adj1 of adjacents) {
+                if (isNodeEmpty(adj1, placements, leadersPositions)) {
+                    const adj2s = getAdjacentNodeIds(NODES, adj1);
+                    if (adj2s.includes(targetNodeId)) {
+                        threatCount += 0.5; // Half weight for 2-move threats
+                        threatUnits.push({ ...unit, movesAway: 2 });
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    
+    return { count: threatCount, units: threatUnits };
+};
+
+/**
+ * Detect if the enemy can checkmate AI leader in the next turn
+ * Returns a threat level: 0 (safe), 1 (warning), 2 (danger), 3 (critical)
+ */
+const detectImmediateCheckmateThreat = (aiPlayerKey, state) => {
+    const enemyKey = aiPlayerKey === 'p1' ? 'p2' : 'p1';
+    const aiLeaderNodeId = state.leadersPositions[aiPlayerKey];
+    const aiLeaderAdjacents = getAdjacentNodeIds(NODES, aiLeaderNodeId);
+    
+    // Count how many adjacent spaces are blocked (by anyone)
+    const blockedSpaces = aiLeaderAdjacents.filter(id => 
+        !isNodeEmpty(id, state.placements, state.leadersPositions)
+    ).length;
+    
+    // Count spaces blocked specifically by enemies
+    const enemyBlockedSpaces = aiLeaderAdjacents.filter(id => {
+        const occupant = getNodeOccupant(id, state.leadersPositions, state.placements);
+        return occupant && occupant.playerKey === enemyKey;
+    }).length;
+    
+    // Count empty spaces around leader
+    const emptySpaces = aiLeaderAdjacents.length - blockedSpaces;
+    
+    // Count threats to each empty escape route
+    let escapesUnderThreat = 0;
+    aiLeaderAdjacents.forEach(adjId => {
+        if (isNodeEmpty(adjId, state.placements, state.leadersPositions)) {
+            const threats = countThreatsToNode(adjId, enemyKey, state.placements, state.leadersPositions, 1);
+            if (threats.count > 0) escapesUnderThreat++;
+        }
+    });
+    
+    // Count direct threats to leader position
+    const directThreats = countThreatsToNode(aiLeaderNodeId, enemyKey, state.placements, state.leadersPositions, 1);
+    
+    // Evaluate threat level
+    if (enemyBlockedSpaces >= aiLeaderAdjacents.length - 1 && emptySpaces <= 1) {
+        return { level: 3, reason: 'CRITICAL: Almost surrounded, 1 or fewer escapes' };
+    }
+    if (emptySpaces <= 2 && directThreats.count >= 2) {
+        return { level: 3, reason: 'CRITICAL: Few escapes + multiple direct threats' };
+    }
+    if (emptySpaces <= 1 && escapesUnderThreat >= emptySpaces) {
+        return { level: 3, reason: 'CRITICAL: All escapes under threat' };
+    }
+    if (emptySpaces <= 2 && escapesUnderThreat >= 1) {
+        return { level: 2, reason: 'DANGER: Low mobility + escape under threat' };
+    }
+    if (directThreats.count >= 3) {
+        return { level: 2, reason: 'DANGER: Multiple units threatening leader' };
+    }
+    if (emptySpaces <= 2) {
+        return { level: 1, reason: 'WARNING: Low mobility' };
+    }
+    if (directThreats.count >= 2) {
+        return { level: 1, reason: 'WARNING: Multiple approaching threats' };
+    }
+    
+    return { level: 0, reason: 'Safe' };
+};
+
+/**
+ * Calculate checkmate opportunity against enemy leader
+ */
+const detectCheckmateOpportunity = (aiPlayerKey, state) => {
+    const enemyKey = aiPlayerKey === 'p1' ? 'p2' : 'p1';
+    const enemyLeaderNodeId = state.leadersPositions[enemyKey];
+    const enemyLeaderAdjacents = getAdjacentNodeIds(NODES, enemyLeaderNodeId);
+    
+    const blockedByAI = enemyLeaderAdjacents.filter(id => {
+        const occupant = getNodeOccupant(id, state.leadersPositions, state.placements);
+        return occupant && occupant.playerKey === aiPlayerKey;
+    }).length;
+    
+    const emptySpaces = enemyLeaderAdjacents.filter(id => 
+        isNodeEmpty(id, state.placements, state.leadersPositions)
+    ).length;
+    
+    // Check if AI units can reach empty spaces near enemy leader
+    let reachableEmptySpaces = 0;
+    enemyLeaderAdjacents.forEach(adjId => {
+        if (isNodeEmpty(adjId, state.placements, state.leadersPositions)) {
+            const aiThreats = countThreatsToNode(adjId, aiPlayerKey, state.placements, state.leadersPositions, 1);
+            if (aiThreats.count > 0) reachableEmptySpaces++;
+        }
+    });
+    
+    if (emptySpaces <= 1 && blockedByAI >= 2) {
+        return { level: 3, reason: 'Can checkmate!' };
+    }
+    if (emptySpaces <= 2 && reachableEmptySpaces >= emptySpaces) {
+        return { level: 2, reason: 'Close to checkmate' };
+    }
+    if (blockedByAI >= 2) {
+        return { level: 1, reason: 'Good pressure' };
+    }
+    
+    return { level: 0, reason: 'No opportunity' };
+};
 
 // Portrait filename to cardKey mapping (same as GameUtils)
 const PORTRAIT_KEY_MAPPING = {
@@ -174,54 +347,509 @@ const evaluateState = (state, aiPlayerKey, outcome) => {
     const aiSafety = evaluateLeaderState(aiPlayerKey, state.placements, state.leadersPositions);
     const enemySafety = evaluateLeaderState(enemyKey, state.placements, state.leadersPositions);
 
-    if (aiSafety.captured || aiSafety.surrounded) score -= 5000; // Danger!
-    if (enemySafety.captured || enemySafety.surrounded) score += 5000; // Winning chance!
+    if (aiSafety.captured || aiSafety.surrounded) score -= 10000; // Danger! (Increased from 5000)
+    if (enemySafety.captured || enemySafety.surrounded) score += 10000; // Winning chance!
 
-    // 4. Positional Advantage for Units
-    const enemyLeaderPos = NODES.find(n => n.id === state.leadersPositions[enemyKey]);
-    const aiLeaderPos = NODES.find(n => n.id === state.leadersPositions[aiPlayerKey]);
+    // --- NEW: Threat Awareness & Ability Awareness ---
+    
+    // A. Analyze Enemy Threats on Board (COMPREHENSIVE)
+    const aiLeaderNodeId = state.leadersPositions[aiPlayerKey];
+    const aiLeaderNode = NODES.find(n => n.id === aiLeaderNodeId);
+    const aiLeaderAdjacentsForThreats = getAdjacentNodeIds(NODES, aiLeaderNodeId);
+    
+    // Get AI units protecting the leader (for cogneur threat analysis)
+    const aiUnitsNearLeader = state.placements.filter(p => 
+        p.playerKey === aiPlayerKey && aiLeaderAdjacentsForThreats.includes(p.nodeId)
+    );
     
     state.placements.forEach(p => {
-        const unitNode = NODES.find(n => n.id === p.nodeId);
-        if (!unitNode) return;
-
-        if (p.playerKey === aiPlayerKey) {
-            // Bonus for AI units being close to enemy leader (offensive pressure)
-            if (enemyLeaderPos) {
-                const distToEnemyLeader = Math.abs(unitNode.col - enemyLeaderPos.col) + Math.abs(unitNode.row - enemyLeaderPos.row);
-                score += Math.max(0, (6 - distToEnemyLeader) * 10); // Closer = better
+        if (p.playerKey === enemyKey) {
+            const unitNode = NODES.find(n => n.id === p.nodeId);
+            
+            // ============ ACTIVE ABILITY THREATS ============
+            
+            // 1. LANCE-GRAPPIN (Grappling Hook) - Can pull Leader
+            if (p.cardKey === 'lancegrappin') {
+                const targets = getClawLauncherTargets(p.nodeId, enemyKey, state.placements, state.leadersPositions);
+                const threatensLeader = targets.some(t => t.nodeId === aiLeaderNodeId);
+                if (threatensLeader) score -= 2500; // High threat: Can be pulled
+                
+                // Also dangerous if it can pull AI's defensive units away
+                const canPullDefender = targets.some(t => 
+                    t.playerKey === aiPlayerKey && aiLeaderAdjacentsForThreats.includes(t.nodeId)
+                );
+                if (canPullDefender) score -= 800; // Can disrupt defense
             }
             
-            // Bonus for AI units being adjacent to enemy leader (VERY good)
-            const adjacentToEnemy = getAdjacentNodeIds(NODES, p.nodeId).includes(state.leadersPositions[enemyKey]);
-            if (adjacentToEnemy) score += 200;
-
-            // Bonus for protecting own leader (units near own leader)
-            if (aiLeaderPos) {
-                const distToOwnLeader = Math.abs(unitNode.col - aiLeaderPos.col) + Math.abs(unitNode.row - aiLeaderPos.row);
-                if (distToOwnLeader <= 2) score += 15; // Defensive bonus
-            }
-        } else {
-            // Penalty for enemy units close to AI leader
-            if (aiLeaderPos) {
-                const distToAILeader = Math.abs(unitNode.col - aiLeaderPos.col) + Math.abs(unitNode.row - aiLeaderPos.row);
-                score -= Math.max(0, (6 - distToAILeader) * 10);
+            // 2. MANIPULATRICE - Can forcibly move Leader
+            else if (p.cardKey === 'manipulatrice') {
+                const targets = getManipulatorTargets(p.nodeId, enemyKey, state.placements, state.leadersPositions);
+                const threatensLeader = targets.some(t => t.nodeId === aiLeaderNodeId);
+                if (threatensLeader) score -= 2500; // High threat: Can be moved into trap
+                
+                // Check if manipulator can move AI units protecting leader
+                const canMoveDefender = targets.some(t => 
+                    t.playerKey === aiPlayerKey && aiLeaderAdjacentsForThreats.includes(t.nodeId)
+                );
+                if (canMoveDefender) score -= 800;
             }
             
-            // Big penalty if enemy adjacent to AI leader
-            const adjacentToAI = getAdjacentNodeIds(NODES, p.nodeId).includes(state.leadersPositions[aiPlayerKey]);
-            if (adjacentToAI) score -= 200;
+            // 3. ASSASSIN - Lethal at close range
+            else if (p.cardKey === 'assassin') {
+                if (unitNode && aiLeaderNode) {
+                    const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
+                    if (dist === 1) score -= 4000; // Adjacent = CRITICAL
+                    else if (dist === 2) score -= 1500; // Very close
+                    else if (dist <= 3) score -= 500; // Approaching
+                }
+            }
+            
+            // 4. ILLUSIONNISTE - Can swap positions (VERY DANGEROUS)
+            else if (p.cardKey === 'illusionniste') {
+                const targets = getIllusionistTargets(p.nodeId, enemyKey, state.placements, state.leadersPositions);
+                
+                // Can it swap with AI Leader directly?
+                const canSwapLeader = targets.some(t => t.nodeId === aiLeaderNodeId);
+                if (canSwapLeader) score -= 3000; // Can teleport leader into danger!
+                
+                // Can it swap an enemy unit to be adjacent to AI leader?
+                const canSwapToThreat = targets.some(t => {
+                    if (t.playerKey === enemyKey && t.type === 'unit') {
+                        // After swap, illusionist would be at target position
+                        // Check if illusionist's current position is adjacent to AI leader
+                        return aiLeaderAdjacentsForThreats.includes(p.nodeId);
+                    }
+                    return false;
+                });
+                if (canSwapToThreat) score -= 1500;
+                
+                // Can swap AI's defensive units away?
+                const canSwapDefender = targets.some(t => 
+                    t.playerKey === aiPlayerKey && aiLeaderAdjacentsForThreats.includes(t.nodeId)
+                );
+                if (canSwapDefender) score -= 1000;
+            }
+            
+            // 5. COGNEUR (Bruiser) - Can push units
+            else if (p.cardKey === 'cogneur') {
+                const pushTargets = getBruiserTargets(p.nodeId, enemyKey, state.placements, state.leadersPositions);
+                
+                // Can it push AI leader?
+                const canPushLeader = pushTargets.some(t => t.nodeId === aiLeaderNodeId);
+                if (canPushLeader) score -= 2000; // Can push leader into corner
+                
+                // Can it push away AI's defenders?
+                const canPushDefender = pushTargets.some(t => 
+                    t.playerKey === aiPlayerKey && aiLeaderAdjacentsForThreats.includes(t.nodeId)
+                );
+                if (canPushDefender) score -= 1200; // Can clear path to leader
+                
+                // Distance-based threat
+                if (unitNode && aiLeaderNode) {
+                    const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
+                    if (dist <= 2) score -= 400;
+                }
+            }
+            
+            // 6. RODEUSE (Wanderer) - Extreme mobility, can appear anywhere!
+            else if (p.cardKey === 'rodeuse') {
+                const destinations = getWandererDestinations(p.nodeId, enemyKey, state.placements, state.leadersPositions);
+                
+                // Can land adjacent to AI leader?
+                const canReachLeader = destinations.some(destId => aiLeaderAdjacentsForThreats.includes(destId));
+                if (canReachLeader) score -= 1500; // High mobility threat
+                
+                // Even if can't reach now, wanderer is always dangerous
+                score -= 200; // General anxiety about wanderer
+            }
+            
+            // 7. CAVALIER (Rider) - Dash through units
+            else if (p.cardKey === 'cavalier') {
+                const dashes = getRiderLandingOptions(p.nodeId, state.placements, state.leadersPositions);
+                const canReachLeaderAdjacent = dashes.some(destId => aiLeaderAdjacentsForThreats.includes(destId));
+                if (canReachLeaderAdjacent) score -= 1200; // Can dash to leader
+                
+                if (unitNode && aiLeaderNode) {
+                    const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
+                    if (dist <= 4) score -= 300; // In dash range
+                }
+            }
+            
+            // 8. ACROBATE - Jump over units
+            else if (p.cardKey === 'acrobate') {
+                const jumps = getAcrobatLandingOptions(p.nodeId, state.placements, state.leadersPositions);
+                const canJumpToLeader = jumps.some(j => aiLeaderAdjacentsForThreats.includes(j.nodeId));
+                if (canJumpToLeader) score -= 1200; // Can jump to leader
+                
+                if (unitNode && aiLeaderNode) {
+                    const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
+                    if (dist <= 3) score -= 300;
+                }
+            }
+            
+            // 9. GARDE ROYAL (Royal Guard) - Special movement near enemy leader
+            else if (p.cardKey === 'garderoyal') {
+                // Royal Guard moves relative to ENEMY leader, which is AI's leader!
+                const royalMoves = getRoyalGuardMoves(enemyKey, state.placements, state.leadersPositions);
+                // Note: getRoyalGuardMoves uses the player's OWN leader, so this might need adjustment
+                // But if enemy Royal Guard exists, it's still a mobile threat
+                if (unitNode && aiLeaderNode) {
+                    const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
+                    if (dist <= 2) score -= 600; // Close royal guard
+                    else if (dist <= 4) score -= 300;
+                }
+            }
+            
+            // ============ PASSIVE ABILITY THREATS ============
+            
+            // 10. GEOLIER (Jailer) - Blocks escape routes passively
+            else if (p.cardKey === 'geolier') {
+                // Geolier is dangerous near leader because it can block escapes
+                if (unitNode && aiLeaderNode) {
+                    const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
+                    if (dist <= 2) score -= 800; // Blocking escape routes
+                    if (dist === 1) score -= 1200; // Adjacent jailer is very bad
+                }
+            }
+            
+            // 11. ARCHERE (Archer) - Ranged passive threat
+            else if (p.cardKey === 'archere') {
+                // Archer threatens in straight lines
+                if (unitNode && aiLeaderNode) {
+                    const sameCol = unitNode.col === aiLeaderNode.col;
+                    const sameRow = unitNode.row === aiLeaderNode.row;
+                    if (sameCol || sameRow) {
+                        score -= 500; // In firing line
+                    }
+                    const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
+                    if (dist <= 3) score -= 300;
+                }
+            }
+            
+            // 12. NEMESIS - Mirrors opponent's last move (unpredictable)
+            else if (p.cardKey === 'nemesis') {
+                if (unitNode && aiLeaderNode) {
+                    const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
+                    if (dist <= 2) score -= 500; // Unpredictable threat
+                }
+            }
+            
+            // 13. Generic proximity threat for any other unit
+            else {
+                if (unitNode && aiLeaderNode) {
+                    const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
+                    if (dist === 1) score -= 200; // Any adjacent enemy is a threat
+                }
+            }
         }
     });
 
-    // 5. Leader Mobility (Having escape routes)
+    // B. Analyze Enemy Hand (Potential Threats) - COMPREHENSIVE
+    const aiLeaderEmptySpacesForHand = aiLeaderAdjacentsForThreats.filter(id => 
+        isNodeEmpty(id, state.placements, state.leadersPositions)
+    ).length;
+    const isLeaderVulnerable = aiLeaderEmptySpacesForHand <= 2;
+    
+    state.decks[enemyKey]?.forEach(c => {
+        if (c) {
+            // High threat abilities in hand
+            if (HIGH_THREAT_ABILITIES.includes(c.cardKey)) {
+                score -= 150;
+                if (isLeaderVulnerable) score -= 200; // Extra penalty when vulnerable
+            }
+            
+            // Mobile abilities in hand
+            if (MOBILE_ABILITIES.includes(c.cardKey)) {
+                score -= 80;
+                if (isLeaderVulnerable) score -= 150;
+            }
+            
+            // Passive threat abilities
+            if (PASSIVE_THREAT_ABILITIES.includes(c.cardKey)) {
+                score -= 50;
+            }
+            
+            // Specific high-danger cards
+            if (c.cardKey === 'illusionniste') {
+                score -= 100; // Swap ability is very dangerous to hold
+            }
+            if (c.cardKey === 'rodeuse') {
+                score -= 100; // Can appear anywhere
+            }
+        }
+    });
+
+    // C. ADVANCED Checkmate / Trap Awareness
+    const checkmateThreat = detectImmediateCheckmateThreat(aiPlayerKey, state);
+    const checkmateOpp = detectCheckmateOpportunity(aiPlayerKey, state);
+    
+    // Apply threat penalties based on severity
+    switch (checkmateThreat.level) {
+        case 3: // CRITICAL
+            score -= 8000;
+            break;
+        case 2: // DANGER
+            score -= 4000;
+            break;
+        case 1: // WARNING
+            score -= 1500;
+            break;
+    }
+    
+    // Apply opportunity bonuses
+    switch (checkmateOpp.level) {
+        case 3: // Can checkmate!
+            score += 8000;
+            break;
+        case 2: // Close to checkmate
+            score += 3000;
+            break;
+        case 1: // Good pressure
+            score += 500;
+            break;
+    }
+    
+    // D. Escape Route Quality Analysis
     const aiLeaderAdjacents = getAdjacentNodeIds(NODES, state.leadersPositions[aiPlayerKey]);
     const aiLeaderEmptySpaces = aiLeaderAdjacents.filter(id => isNodeEmpty(id, state.placements, state.leadersPositions)).length;
-    score += aiLeaderEmptySpaces * 5; // More escape routes = safer
+    
+    // Check quality of escape routes (are they safe or threatened?)
+    let safeEscapes = 0;
+    let threatenedEscapes = 0;
+    aiLeaderAdjacents.forEach(adjId => {
+        if (isNodeEmpty(adjId, state.placements, state.leadersPositions)) {
+            const threats = countThreatsToNode(adjId, enemyKey, state.placements, state.leadersPositions, 1);
+            if (threats.count === 0) {
+                safeEscapes++;
+            } else {
+                threatenedEscapes++;
+            }
+        }
+    });
+    
+    // Bonus for safe escapes, penalty if all escapes are threatened
+    score += safeEscapes * 50;
+    if (safeEscapes === 0 && aiLeaderEmptySpaces > 0) {
+        score -= 2000; // All escape routes are under threat!
+    }
+    
+    // E. Two-Turn Threat Detection
+    // Check if enemy can set up a checkmate in 2 turns
+    const twoMoveThreats = countThreatsToNode(state.leadersPositions[aiPlayerKey], enemyKey, state.placements, state.leadersPositions, 2);
+    if (twoMoveThreats.count >= 3 && aiLeaderEmptySpaces <= 3) {
+        score -= 1000; // Multiple units converging
+    }
 
-    const enemyLeaderAdjacents = getAdjacentNodeIds(NODES, state.leadersPositions[enemyKey]);
-    const enemyLeaderEmptySpaces = enemyLeaderAdjacents.filter(id => isNodeEmpty(id, state.placements, state.leadersPositions)).length;
-    score -= enemyLeaderEmptySpaces * 5; // Trap enemy leader
+    // =========================================================================
+    // F. OFFENSIVE EVALUATION - Attack Enemy Leader
+    // =========================================================================
+    
+    const enemyLeaderNodeId = state.leadersPositions[enemyKey];
+    const enemyLeaderPos = NODES.find(n => n.id === enemyLeaderNodeId);
+    const aiLeaderPos = NODES.find(n => n.id === state.leadersPositions[aiPlayerKey]);
+    const enemyLeaderAdjacents = getAdjacentNodeIds(NODES, enemyLeaderNodeId);
+    
+    // F1. Enemy Leader Mobility Analysis (Lower = Better for AI)
+    const enemyLeaderEmptySpaces = enemyLeaderAdjacents.filter(id => 
+        isNodeEmpty(id, state.placements, state.leadersPositions)
+    ).length;
+    
+    // Bonus for trapping enemy leader
+    if (enemyLeaderEmptySpaces <= 1) {
+        score += 3000; // Enemy almost trapped!
+    } else if (enemyLeaderEmptySpaces <= 2) {
+        score += 1500; // Enemy mobility restricted
+    } else if (enemyLeaderEmptySpaces <= 3) {
+        score += 500; // Some pressure
+    }
+    
+    // F2. AI Units Pressure on Enemy Leader
+    let aiUnitsAdjacentToEnemyLeader = 0;
+    let aiUnitsNearEnemyLeader = 0; // Within 2 spaces
+    let aiUnitsThreateningEnemyLeader = 0; // Can reach in 1 move (including abilities)
+    
+    const aiUnits = state.placements.filter(p => p.playerKey === aiPlayerKey);
+    
+    aiUnits.forEach(unit => {
+        const unitNode = NODES.find(n => n.id === unit.nodeId);
+        if (!unitNode || !enemyLeaderPos) return;
+        
+        const distToEnemyLeader = Math.abs(unitNode.col - enemyLeaderPos.col) + Math.abs(unitNode.row - enemyLeaderPos.row);
+        
+        // Adjacent to enemy leader
+        if (enemyLeaderAdjacents.includes(unit.nodeId)) {
+            aiUnitsAdjacentToEnemyLeader++;
+            score += 400; // Strong offensive position
+        }
+        
+        // Near enemy leader (2-3 spaces)
+        if (distToEnemyLeader <= 2) {
+            aiUnitsNearEnemyLeader++;
+            score += 150;
+        } else if (distToEnemyLeader <= 3) {
+            score += 50;
+        }
+        
+        // Check if unit can threaten enemy leader with abilities
+        if (unit.cardKey === 'lancegrappin') {
+            const targets = getClawLauncherTargets(unit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+            if (targets.some(t => t.nodeId === enemyLeaderNodeId)) {
+                aiUnitsThreateningEnemyLeader++;
+                score += 800; // Can pull enemy leader!
+            }
+        }
+        else if (unit.cardKey === 'manipulatrice') {
+            const targets = getManipulatorTargets(unit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+            if (targets.some(t => t.nodeId === enemyLeaderNodeId)) {
+                aiUnitsThreateningEnemyLeader++;
+                score += 800; // Can move enemy leader!
+            }
+        }
+        else if (unit.cardKey === 'cogneur') {
+            const targets = getBruiserTargets(unit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+            if (targets.some(t => t.nodeId === enemyLeaderNodeId)) {
+                aiUnitsThreateningEnemyLeader++;
+                score += 600; // Can push enemy leader!
+            }
+        }
+        else if (unit.cardKey === 'illusionniste') {
+            const targets = getIllusionistTargets(unit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+            if (targets.some(t => t.nodeId === enemyLeaderNodeId)) {
+                aiUnitsThreateningEnemyLeader++;
+                score += 700; // Can swap with enemy leader!
+            }
+        }
+        else if (unit.cardKey === 'cavalier') {
+            const dashes = getRiderLandingOptions(unit.nodeId, state.placements, state.leadersPositions);
+            if (dashes.some(destId => enemyLeaderAdjacents.includes(destId))) {
+                aiUnitsThreateningEnemyLeader++;
+                score += 500; // Can dash to enemy leader
+            }
+        }
+        else if (unit.cardKey === 'acrobate') {
+            const jumps = getAcrobatLandingOptions(unit.nodeId, state.placements, state.leadersPositions);
+            if (jumps.some(j => enemyLeaderAdjacents.includes(j.nodeId))) {
+                aiUnitsThreateningEnemyLeader++;
+                score += 500; // Can jump to enemy leader
+            }
+        }
+        else if (unit.cardKey === 'rodeuse') {
+            const dests = getWandererDestinations(unit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+            if (dests.some(destId => enemyLeaderAdjacents.includes(destId))) {
+                aiUnitsThreateningEnemyLeader++;
+                score += 600; // Can wander to enemy leader
+            }
+        }
+        
+        // Bonus for offensive positioning (closer to enemy = better)
+        score += Math.max(0, (7 - distToEnemyLeader) * 15);
+    });
+    
+    // Combo bonus: Multiple units pressuring enemy leader
+    if (aiUnitsAdjacentToEnemyLeader >= 2) {
+        score += 1000; // Pincer attack!
+    }
+    if (aiUnitsNearEnemyLeader >= 3) {
+        score += 800; // Surrounding enemy
+    }
+    if (aiUnitsThreateningEnemyLeader >= 2) {
+        score += 1200; // Multiple ability threats!
+    }
+    
+    // F3. Control Empty Spaces Around Enemy Leader
+    let aiControlledEnemyEscapes = 0;
+    enemyLeaderAdjacents.forEach(adjId => {
+        if (isNodeEmpty(adjId, state.placements, state.leadersPositions)) {
+            // Can any AI unit reach this escape route?
+            const aiThreats = countThreatsToNode(adjId, aiPlayerKey, state.placements, state.leadersPositions, 1);
+            if (aiThreats.count > 0) {
+                aiControlledEnemyEscapes++;
+                score += 200; // Controlling enemy escape
+            }
+        }
+    });
+    
+    // Huge bonus if all enemy escapes are under AI control
+    if (aiControlledEnemyEscapes >= enemyLeaderEmptySpaces && enemyLeaderEmptySpaces > 0) {
+        score += 2000; // Checkmate setup!
+    }
+    
+    // =========================================================================
+    // G. OFFENSIVE EVALUATION - Target Enemy Units
+    // =========================================================================
+    
+    const enemyUnits = state.placements.filter(p => p.playerKey === enemyKey);
+    
+    // G1. Identify High-Value Enemy Targets
+    enemyUnits.forEach(enemy => {
+        const enemyNode = NODES.find(n => n.id === enemy.nodeId);
+        if (!enemyNode) return;
+        
+        // Prioritize targeting dangerous enemy units
+        const isDangerous = HIGH_THREAT_ABILITIES.includes(enemy.cardKey) || 
+                           MOBILE_ABILITIES.includes(enemy.cardKey);
+        
+        // Check if AI can threaten this enemy unit
+        aiUnits.forEach(aiUnit => {
+            const aiNode = NODES.find(n => n.id === aiUnit.nodeId);
+            if (!aiNode) return;
+            
+            const dist = Math.abs(aiNode.col - enemyNode.col) + Math.abs(aiNode.row - enemyNode.row);
+            
+            // Adjacent = direct threat
+            if (dist === 1) {
+                score += isDangerous ? 150 : 50; // Bonus for threatening enemy
+            }
+            
+            // Can capture/displace with ability?
+            if (aiUnit.cardKey === 'lancegrappin') {
+                const targets = getClawLauncherTargets(aiUnit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+                if (targets.some(t => t.nodeId === enemy.nodeId)) {
+                    score += isDangerous ? 300 : 100; // Can pull enemy
+                }
+            }
+            else if (aiUnit.cardKey === 'cogneur') {
+                const targets = getBruiserTargets(aiUnit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+                if (targets.some(t => t.nodeId === enemy.nodeId)) {
+                    score += isDangerous ? 250 : 80; // Can push enemy
+                }
+            }
+        });
+        
+        // Penalty if dangerous enemy is uncontested (no AI nearby)
+        const nearbyAI = aiUnits.filter(u => {
+            const uNode = NODES.find(n => n.id === u.nodeId);
+            if (!uNode) return false;
+            const d = Math.abs(uNode.col - enemyNode.col) + Math.abs(uNode.row - enemyNode.row);
+            return d <= 2;
+        }).length;
+        
+        if (isDangerous && nearbyAI === 0) {
+            score -= 200; // Dangerous enemy roaming free
+        }
+    });
+    
+    // =========================================================================
+    // H. DEFENSIVE POSITIONING (Balanced)
+    // =========================================================================
+    
+    aiUnits.forEach(unit => {
+        const unitNode = NODES.find(n => n.id === unit.nodeId);
+        if (!unitNode || !aiLeaderPos) return;
+        
+        const distToOwnLeader = Math.abs(unitNode.col - aiLeaderPos.col) + Math.abs(unitNode.row - aiLeaderPos.row);
+        
+        // Moderate bonus for protecting own leader (but don't over-prioritize)
+        if (distToOwnLeader === 1) {
+            score += 80; // Adjacent defender
+        } else if (distToOwnLeader === 2) {
+            score += 30; // Nearby support
+        }
+    });
+    
+    // I. Leader Mobility Balance
+    score += aiLeaderEmptySpaces * 15; // Own mobility is good
+    score -= enemyLeaderEmptySpaces * 20; // Enemy trapped is better
 
     return score;
 };

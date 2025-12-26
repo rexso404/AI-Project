@@ -1,6 +1,13 @@
+<<<<<<< HEAD
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+=======
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+>>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
 import { getBoardNodes } from '../Logic/Board';
 import { GameAI } from '../Logic/GameAI';
+import { getBestMove } from '../Logic/Minimax';
+import { getRecruitmentValue, getDynamicWeight } from '../Logic/AIWeights';
 import {
   boardImg,
   bgImg,
@@ -47,8 +54,12 @@ import RecruitOptionCard from '../components/RecruitOptionCard.jsx';
 import AbilityTooltip from '../components/AbilityTooltip.jsx';
 
 const Board = ({ gameMode = 'player' }) => {
+<<<<<<< HEAD
   const TURN_TIME_SECONDS = 5 * 60;
   const MOVE_BONUS_SECONDS = 20;
+=======
+  const navigate = useNavigate();
+>>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
   const nodes = useMemo(() => getBoardNodes(), []);
   
   // Derived node maps for quick lookup
@@ -183,6 +194,7 @@ const Board = ({ gameMode = 'player' }) => {
   const playerDeckShiftClass = bothDecksFull ? '-translate-x-12' : '';
   const isPlayer1Turn = currentTurn === 'Player 1';
 
+<<<<<<< HEAD
   const formatClock = (seconds) => {
     const safe = Math.max(0, Math.floor(Number(seconds) || 0));
     const mm = String(Math.floor(safe / 60)).padStart(2, '0');
@@ -196,6 +208,20 @@ const Board = ({ gameMode = 'player' }) => {
     }
     return playerLabelToKey(currentTurn);
   }, [abilityContext, currentTurn]);
+=======
+  // --- AI State ---
+  const [aiThinking, setAiThinking] = useState(false);
+  
+  // Ref to hold mutable AI state (avoids stale closure issues)
+  const aiActionRef = useRef({
+    moveCount: 0
+  });
+
+  // Forward declare AI functions (will be defined after helpers)
+  const executeAIMoveRef = useRef(null);
+  const handleAITurnEndRef = useRef(null);
+  const handleAIPostActionsRef = useRef(null);
+>>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
 
   function grantMoveBonus(playerKey) {
     if (!playerKey) return;
@@ -213,7 +239,7 @@ const Board = ({ gameMode = 'player' }) => {
       const emptySlot = decks.p2.findIndex(c => c === null);
       if (emptySlot === -1) {
         console.warn("AI tried to recruit but deck is full.");
-        toggleTurn();
+        setRecruitPickRemaining(prev => Math.max(0, prev - 1));
         return;
       }
 
@@ -221,7 +247,7 @@ const Board = ({ gameMode = 'player' }) => {
       const card = leaders[move.index];
       if (!card) {
         console.warn("AI tried to recruit invalid card.");
-        toggleTurn();
+        setRecruitPickRemaining(prev => Math.max(0, prev - 1));
         return;
       }
 
@@ -230,16 +256,25 @@ const Board = ({ gameMode = 'player' }) => {
       setRetiredCards(updatedRetired);
 
       // 4. Determine Placement (Simple Heuristic: First valid spot in back row)
-      const validNodes = nodes.filter(n => isValidPlacementNode('p2', n) && isNodeEmpty(n.id, placements, leadersPositions));
+      // Inline isValidPlacementNode for p2: node.row === columnMaxRow[node.col]
+      const validNodes = nodes.filter(n => {
+        if (!n) return false;
+        const isValidPlacement = n.row === columnMaxRow[n.col]; // p2 back row
+        return isValidPlacement && isNodeEmpty(n.id, placements, leadersPositions);
+      });
       
       if (validNodes.length === 0) {
         console.warn("AI has no space to place recruited unit.");
-        toggleTurn();
+        setRecruitPickRemaining(prev => Math.max(0, prev - 1));
         return;
       }
 
+<<<<<<< HEAD
       // Pick random valid node
       // Pick a deterministic valid node to keep renders/analysis stable.
+=======
+      // Pick first valid node (deterministic for React strict mode)
+>>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
       const targetNode = validNodes[0];
       
       // 5. Update Leaders pool - remove recruited card and draw replacement
@@ -264,13 +299,19 @@ const Board = ({ gameMode = 'player' }) => {
         // For second token, find another valid spot
         let placementNode = targetNode;
         if (idx > 0) {
-             const remainingNodes = nodes.filter(n => 
-                isValidPlacementNode('p2', n) && 
-                isNodeEmpty(n.id, currentPlacements, currentLeadersPositions) &&
-                n.id !== targetNode.id
-             );
+             const remainingNodes = nodes.filter(n => {
+                if (!n) return false;
+                const isValidPlacement = n.row === columnMaxRow[n.col]; // p2 back row
+                return isValidPlacement && 
+                       isNodeEmpty(n.id, currentPlacements, currentLeadersPositions) &&
+                       n.id !== targetNode.id;
+             });
              if (remainingNodes.length > 0) {
+<<<<<<< HEAD
                placementNode = remainingNodes[0];
+=======
+                 placementNode = remainingNodes[0];
+>>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
              }
         }
 
@@ -311,20 +352,40 @@ const Board = ({ gameMode = 'player' }) => {
 
       grantMoveBonus('p2');
       
-      // Check Win Condition
-      if (finalizeActionOutcome(currentPlacements, currentLeadersPositions)) return;
+      // Check Win Condition (inline finalizeActionOutcome)
+      const outcome = determineGameOutcome(currentPlacements, currentLeadersPositions);
+      if (outcome) {
+        setGameResult(outcome);
+        setStatusMessage('');
+        setSelectedLeader(null);
+        setSelectedUnit(null);
+        setSelectedSummon(null);
+        setCanPickFor(null);
+        return;
+      }
 
-      // Handle Turn Switch
-      // If AI has picks remaining (Reine bonus), it might want to pick again.
-      // But Minimax currently returns 1 move.
-      // For simplicity, we just toggle turn after 1 recruit.
-      // Unless we want to support double recruit.
-      // Let's stick to single recruit for now.
-      toggleTurn();
+      // Handle recruitment picks
+      const newRecruitRemaining = recruitPickRemaining - 1;
+      setRecruitPickRemaining(newRecruitRemaining);
+      
+      // Mark Reine bonus as used if applicable
+      if (reinePlayerKey === 'p2' && !p2RecruitBonusUsed) {
+        setP2RecruitBonusUsed(true);
+      }
+      
+      // If no more recruits, end turn (via ref)
+      if (newRecruitRemaining <= 0) {
+        setCanPickFor(null);
+        if (handleAITurnEndRef.current) handleAITurnEndRef.current();
+      } else {
+        // More recruits remaining, allow useEffect to trigger next recruit
+        setAiThinking(false);
+      }
 
     } else if (move.type === 'MOVE_LEADER') {
         const newPositions = { ...leadersPositions, p2: move.to };
         setLeadersPositions(newPositions);
+<<<<<<< HEAD
         markLeaderMoved('p2');
 
       grantMoveBonus('p2');
@@ -354,7 +415,31 @@ const Board = ({ gameMode = 'player' }) => {
             // That's fine, `startNemesisReactionIfNeeded` will set UI for Player to move.
         } else {
             endPhase();
+=======
+        // Inline markLeaderMoved
+        setMovementTracker((prev) => ({
+          ...prev,
+          p2: { ...prev.p2, leader: true },
+        }));
+        // Update moveCount
+        aiActionRef.current.moveCount += 1;
+        
+        // Inline finalizeActionOutcome
+        const outcome = determineGameOutcome(placements, newPositions);
+        if (outcome) {
+          setGameResult(outcome);
+          setStatusMessage('');
+          setSelectedLeader(null);
+          setSelectedUnit(null);
+          setSelectedSummon(null);
+          setCanPickFor(null);
+          return;
+>>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
         }
+        
+        // Nemesis Reaction - handled by actual function later, skip for now
+        // AI will continue in useEffect after state updates
+        setAiThinking(false); // Allow useEffect to check for more moves
 
     } else if (move.type === 'MOVE_UNIT') {
         const updatedPlacements = placements.map(p => {
@@ -370,7 +455,17 @@ const Board = ({ gameMode = 'player' }) => {
         // Update Deck boardNodeId reference
         const unit = placements.find(p => p.nodeId === move.unitId);
         if (unit) {
-             markUnitMoved('p2', unit.deckIndex, unit.tokenId);
+             // Inline markUnitMoved
+             const key = unit.tokenId != null ? `${unit.deckIndex}:${unit.tokenId}` : `${unit.deckIndex}`;
+             setMovementTracker((prev) => {
+               if (prev.p2.units.includes(key)) return prev;
+               return {
+                 ...prev,
+                 p2: { ...prev.p2, units: [...prev.p2.units, key] },
+               };
+             });
+             // Update moveCount
+             aiActionRef.current.moveCount += 1;
              setDecks(prev => ({
                 ...prev,
                 p2: prev.p2.map((c, i) => {
@@ -381,8 +476,19 @@ const Board = ({ gameMode = 'player' }) => {
              }));
         }
 
-        if (finalizeActionOutcome(updatedPlacements, leadersPositions)) return;
-        endPhase();
+        // Inline finalizeActionOutcome
+        const outcome = determineGameOutcome(updatedPlacements, leadersPositions);
+        if (outcome) {
+          setGameResult(outcome);
+          setStatusMessage('');
+          setSelectedLeader(null);
+          setSelectedUnit(null);
+          setSelectedSummon(null);
+          setCanPickFor(null);
+          return;
+        }
+        // Allow useEffect to check for more moves
+        setAiThinking(false);
 
     } else if (move.type === 'USE_ABILITY') {
         let updatedPlacements = [...placements];
@@ -434,9 +540,18 @@ const Board = ({ gameMode = 'player' }) => {
         setPlacements(updatedPlacements);
         grantMoveBonus('p2');
 
-        // Mark unit as moved (Action used)
+        // Mark unit as moved (Action used) - Inline markUnitMoved
         if (unitToMark) {
-            markUnitMoved('p2', unitToMark.deckIndex, unitToMark.tokenId);
+            const key = unitToMark.tokenId != null ? `${unitToMark.deckIndex}:${unitToMark.tokenId}` : `${unitToMark.deckIndex}`;
+            setMovementTracker((prev) => {
+              if (prev.p2.units.includes(key)) return prev;
+              return {
+                ...prev,
+                p2: { ...prev.p2, units: [...prev.p2.units, key] },
+              };
+            });
+            // Update moveCount
+            aiActionRef.current.moveCount += 1;
             
             // Update Deck boardNodeId if unit moved (for consistency)
             if (['acrobate', 'cavalier', 'garderoyal', 'rodeuse'].includes(move.ability) || (move.ability === 'lancegrappin' && move.subType === 'move_self')) {
@@ -461,10 +576,26 @@ const Board = ({ gameMode = 'player' }) => {
             }
         }
 
-        if (finalizeActionOutcome(updatedPlacements, leadersPositions)) return;
-        endPhase();
+        // Inline finalizeActionOutcome
+        const outcome = determineGameOutcome(updatedPlacements, leadersPositions);
+        if (outcome) {
+          setGameResult(outcome);
+          setStatusMessage('');
+          setSelectedLeader(null);
+          setSelectedUnit(null);
+          setSelectedSummon(null);
+          setCanPickFor(null);
+          return;
+        }
+        // Allow useEffect to check for more moves
+        setAiThinking(false);
     }
   }
+
+  // Update executeAIMoveRef so it can be called from useEffect
+  useEffect(() => {
+    executeAIMoveRef.current = executeAIMove;
+  });
 
   // Helper Wrappers
   const hasLeaderMoved = (playerKey) => Boolean(movementTracker[playerKey]?.leader);
@@ -2175,6 +2306,7 @@ const Board = ({ gameMode = 'player' }) => {
     setSelectedSummon(null);
     resetMovementTracker();
     setStatusMessage('');
+<<<<<<< HEAD
   }
 
   function handleTurnTimeout(ownerKey) {
@@ -2271,12 +2403,196 @@ const Board = ({ gameMode = 'player' }) => {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [abilityContext, currentTurn, gameMode, isGameOver, leaders, decks, placements, leadersPositions, movementTracker, recruitPickRemaining, retiredCards]);
+=======
+    aiActionRef.current.moveCount = 0; // Reset AI move count on turn change
+  };
+>>>>>>> 3f3b0ddd13444ed973c5ce532daa563ec458ac8b
 
   const endPhase = () => {
     if (isGameOver) return;
     if (selectedSummon?.forced) return;
     handlePostMove(currentTurn);
   };
+
+  // --- AI Turn End Handler ---
+  const handleAITurnEnd = useCallback(() => {
+    console.log("AI Turn Complete. Switching to Player 1.");
+    aiActionRef.current.moveCount = 0;
+    setCurrentTurn('Player 1');
+    setSelectedLeader(null);
+    setSelectedUnit(null);
+    setSelectedNode(null);
+    setCanPickFor(null);
+    setRecruitPickRemaining(0);
+    setSelectedSummon(null);
+    setMovementTracker(createMovementTracker());
+    setStatusMessage('');
+    setAiThinking(false);
+  }, []);
+
+  // --- AI Post Actions Handler (check for recruitment) ---
+  const handleAIPostActions = useCallback(() => {
+    const piecesCount = new Set(
+      placements.filter(p => p.playerKey === 'p2').map(p => p.deckIndex)
+    ).size;
+    const hasDraftOptions = leaders.some(Boolean);
+    const deckFull = decks.p2.every(Boolean);
+
+    if (deckFull || piecesCount >= 4 || !hasDraftOptions) {
+      // No recruitment needed, end turn
+      handleAITurnEnd();
+    } else {
+      // Trigger recruitment phase for AI
+      setCanPickFor('Player 2');
+      const initialAllowance = (reinePlayerKey === 'p2' && !p2RecruitBonusUsed) ? 2 : 1;
+      setRecruitPickRemaining(initialAllowance);
+      setAiThinking(false); // Allow next useEffect cycle to pick up recruitment
+    }
+  }, [placements, leaders, decks, reinePlayerKey, p2RecruitBonusUsed, handleAITurnEnd]);
+
+  // Update refs so they can be accessed from executeAIMove
+  useEffect(() => {
+    handleAITurnEndRef.current = handleAITurnEnd;
+    handleAIPostActionsRef.current = handleAIPostActions;
+  }, [handleAITurnEnd, handleAIPostActions]);
+
+  // ============================================================
+  // MAIN AI ORCHESTRATION - useEffect Chain for Sequential Moves
+  // ============================================================
+  useEffect(() => {
+    // Skip if PvP mode - Player 2 is human
+    if (gameMode === 'player') return;
+    
+    // Skip if not AI's turn or game ended
+    if (currentTurn !== 'Player 2' || gameResult) return;
+    // Skip if AI is already processing
+    if (aiThinking) return;
+    // Skip if player is in middle of special action
+    if (abilityContext) return;
+    if (selectedSummon?.forced) return;
+
+    // CASE 1: AI Recruitment Phase
+    if (canPickFor === 'Player 2' && recruitPickRemaining > 0) {
+      // AI needs to recruit - use setTimeout to avoid React warning about setState in effect
+      setTimeout(() => setAiThinking(true), 0);
+      console.log(`[AI ORCHESTRATION] Recruitment phase - picks remaining: ${recruitPickRemaining}`);
+      
+      setTimeout(() => {
+        // Find available leaders to recruit
+        const availableLeaders = leaders
+          .map((leader, idx) => ({ leader, idx }))
+          .filter(({ leader }) => leader !== null);
+
+        if (availableLeaders.length > 0) {
+          // Get enemy deck for dynamic weight calculation
+          const enemyDeck = decks.p1 || [];
+          
+          // Calculate weighted value for each available leader
+          const weightedLeaders = availableLeaders.map(({ leader, idx }) => {
+            const cardKey = leader?.cardKey || extractPortraitKey(leader);
+            // Use recruitment value (handles special cases like Hermit & Cub)
+            const baseValue = getRecruitmentValue(cardKey);
+            // Apply dynamic adjustments based on enemy composition
+            const dynamicValue = getDynamicWeight(cardKey, enemyDeck);
+            // Combined score (average of base recruitment and dynamic)
+            const score = (baseValue + dynamicValue) / 2;
+            return { leader, idx, cardKey, score };
+          });
+          
+          // Sort by score descending and pick the best
+          weightedLeaders.sort((a, b) => b.score - a.score);
+          const bestChoice = weightedLeaders[0];
+          
+          console.log(`[AI ORCHESTRATION] Recruitment evaluation:`, 
+            weightedLeaders.map(l => `${l.cardKey}: ${l.score.toFixed(1)}`).join(', '));
+          console.log(`[AI ORCHESTRATION] Recruiting best card: ${bestChoice.cardKey} (score: ${bestChoice.score.toFixed(1)}) at index ${bestChoice.idx}`);
+          
+          // Use executeAIMove which has complete recruitment logic
+          // (updates deck, placements, board position, etc.)
+          if (executeAIMoveRef.current) {
+            executeAIMoveRef.current({ type: 'RECRUIT', index: bestChoice.idx });
+          }
+          // executeAIMove will handle setAiThinking(false) or end turn
+        } else {
+          // No leaders available to recruit
+          setCanPickFor(null);
+          setAiThinking(false);
+          if (handleAITurnEndRef.current) handleAITurnEndRef.current();
+        }
+      }, 600);
+
+      return;
+    }
+
+    // CASE 2: AI Action Phase - Check if AI has moves remaining
+    const aiPieces = placements.filter(p => p.playerKey === 'p2');
+    const aiHasLeader = leadersPositions.p2 !== null;
+    const movedPiecesCount = aiActionRef.current.moveCount;
+    
+    // AI can move: leader + all deployed units
+    const totalPossibleMoves = (aiHasLeader ? 1 : 0) + aiPieces.length;
+    const hasMovesRemaining = movedPiecesCount < totalPossibleMoves;
+
+    console.log(`[AI ORCHESTRATION] Action phase - moved: ${movedPiecesCount}/${totalPossibleMoves}, hasMovesRemaining: ${hasMovesRemaining}`);
+
+    if (hasMovesRemaining && canPickFor === null && recruitPickRemaining === 0) {
+      // AI can still make action moves - use setTimeout to avoid React warning
+      setTimeout(() => setAiThinking(true), 0);
+      
+      setTimeout(() => {
+        // Construct game state for Minimax
+        const gameState = {
+          leaders,
+          decks,
+          placements,
+          leadersPositions,
+          currentTurn,
+          recruitPickRemaining,
+          movementTracker
+        };
+        
+        const bestMove = getBestMove(gameState, 'p2');
+        
+        if (bestMove && executeAIMoveRef.current) {
+          console.log('[AI ORCHESTRATION] Best move found:', bestMove);
+          executeAIMoveRef.current(bestMove);
+        } else {
+          console.log('[AI ORCHESTRATION] No valid move found, ending turn');
+          if (handleAITurnEndRef.current) handleAITurnEndRef.current();
+        }
+      }, 500);
+      
+      return;
+    }
+
+    // CASE 3: All moves done, check for recruitment
+    if (!hasMovesRemaining && canPickFor === null) {
+      console.log('[AI ORCHESTRATION] All moves done, checking for recruitment phase...');
+      setTimeout(() => setAiThinking(true), 0);
+      
+      setTimeout(() => {
+        if (handleAIPostActionsRef.current) {
+          handleAIPostActionsRef.current();
+        }
+      }, 300);
+    }
+
+  }, [
+    gameMode,
+    currentTurn,
+    gameResult,
+    aiThinking,
+    abilityContext,
+    selectedSummon,
+    canPickFor,
+    recruitPickRemaining,
+    placements,
+    leadersPositions,
+    leaders,
+    decks,
+    nodes,
+    movementTracker
+  ]);
 
   const isValidPlacementNode = (playerKey, node) => {
     if (!node) return false;
@@ -2838,6 +3154,15 @@ const Board = ({ gameMode = 'player' }) => {
           <div className="text-base text-gray-800 font-medium">{phaseInfo.description}</div>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => {
+              resetGameState();
+              navigate('/');
+            }}
+            className="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-5 rounded shadow"
+          >
+            Surrender
+          </button>
           <button
             onClick={resetGameState}
             className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold py-2 px-5 rounded shadow"
