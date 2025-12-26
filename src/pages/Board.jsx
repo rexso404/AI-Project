@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getBoardNodes } from '../Logic/Board';
 import { GameAI } from '../Logic/GameAI';
 import {
@@ -47,6 +47,8 @@ import RecruitOptionCard from '../components/RecruitOptionCard.jsx';
 import AbilityTooltip from '../components/AbilityTooltip.jsx';
 
 const Board = ({ gameMode = 'player' }) => {
+  const TURN_TIME_SECONDS = 5 * 60;
+  const MOVE_BONUS_SECONDS = 20;
   const nodes = useMemo(() => getBoardNodes(), []);
   
   // Derived node maps for quick lookup
@@ -136,6 +138,10 @@ const Board = ({ gameMode = 'player' }) => {
   const [leaders, setLeaders] = useState(() => savedGame?.leaders ?? generateInitialLeaders());
   const [selectedNode, setSelectedNode] = useState(null);
   const [currentTurn, setCurrentTurn] = useState(() => savedGame?.currentTurn ?? playerKeyToLabel(initialGameLeaderData.firstPlayerKey));
+  const [turnCount, setTurnCount] = useState(() => {
+    const raw = Number(savedGame?.turnCount);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1;
+  });
   const [leadersPositions, setLeadersPositions] = useState(() => savedGame?.leadersPositions ?? createInitialLeaderPositions());
   const [selectedLeader, setSelectedLeader] = useState(null);
   const [canPickFor, setCanPickFor] = useState(() => savedGame?.canPickFor ?? null);
@@ -150,6 +156,18 @@ const Board = ({ gameMode = 'player' }) => {
   const [statusMessage, setStatusMessage] = useState(() => savedGame?.statusMessage ?? '');
   const [gameResult, setGameResult] = useState(() => savedGame?.gameResult ?? null);
   const [abilityContext, setAbilityContext] = useState(null);
+  const [pendingForcedResume, setPendingForcedResume] = useState(null);
+  const [clocks, setClocks] = useState(() => {
+    const raw = savedGame?.clocks;
+    const fallback = { p1: TURN_TIME_SECONDS, p2: TURN_TIME_SECONDS };
+    if (!raw || typeof raw !== 'object') return fallback;
+    const p1 = Number(raw.p1);
+    const p2 = Number(raw.p2);
+    return {
+      p1: Number.isFinite(p1) && p1 >= 0 ? Math.floor(p1) : fallback.p1,
+      p2: Number.isFinite(p2) && p2 >= 0 ? Math.floor(p2) : fallback.p2,
+    };
+  });
   const [gameLeaders, setGameLeaders] = useState(() => initialGameLeaderData.leaders);
 
   const reinePlayerKey = useMemo(() => {
@@ -165,38 +183,29 @@ const Board = ({ gameMode = 'player' }) => {
   const playerDeckShiftClass = bothDecksFull ? '-translate-x-12' : '';
   const isPlayer1Turn = currentTurn === 'Player 1';
 
-  // --- AI Integration ---
-  useEffect(() => {
-    if (gameMode === 'ai' && currentTurn === 'Player 2' && !isGameOver) {
-      // AI Turn
-      const ai = new GameAI({
-        leaders,
-        decks,
-        placements,
-        leadersPositions,
-        currentTurn,
-        movementTracker,
-        retiredCards,
-        recruitPickRemaining
-      });
+  const formatClock = (seconds) => {
+    const safe = Math.max(0, Math.floor(Number(seconds) || 0));
+    const mm = String(Math.floor(safe / 60)).padStart(2, '0');
+    const ss = String(safe % 60).padStart(2, '0');
+    return `${mm}:${ss}`;
+  };
 
-      // Small delay for realism
-      const timer = setTimeout(() => {
-        const move = ai.decideMove('p2');
-        if (move) {
-          executeAIMove(move);
-        } else {
-          // Fallback if no move found (e.g. stuck), just end turn to prevent freeze
-          console.warn("AI found no valid move. Skipping turn.");
-          toggleTurn();
-        }
-      }, 1000);
-
-      return () => clearTimeout(timer);
+  const activeClockOwnerKey = useMemo(() => {
+    if (abilityContext?.data?.isForced && abilityContext?.data?.allowOffTurn && abilityContext?.playerKey) {
+      return abilityContext.playerKey;
     }
-  }, [currentTurn, gameMode, isGameOver, leaders, decks, placements, leadersPositions, movementTracker, recruitPickRemaining]);
+    return playerLabelToKey(currentTurn);
+  }, [abilityContext, currentTurn]);
 
-  const executeAIMove = (move) => {
+  function grantMoveBonus(playerKey) {
+    if (!playerKey) return;
+    setClocks((prev) => ({
+      ...prev,
+      [playerKey]: Math.max(0, Number(prev?.[playerKey] ?? TURN_TIME_SECONDS)) + MOVE_BONUS_SECONDS,
+    }));
+  }
+
+  function executeAIMove(move) {
     console.log("Executing AI Move:", move);
 
     if (move.type === 'RECRUIT') {
@@ -230,7 +239,8 @@ const Board = ({ gameMode = 'player' }) => {
       }
 
       // Pick random valid node
-      const targetNode = validNodes[Math.floor(Math.random() * validNodes.length)];
+      // Pick a deterministic valid node to keep renders/analysis stable.
+      const targetNode = validNodes[0];
       
       // 5. Update Leaders pool - remove recruited card and draw replacement
       setLeaders(prev => {
@@ -260,7 +270,7 @@ const Board = ({ gameMode = 'player' }) => {
                 n.id !== targetNode.id
              );
              if (remainingNodes.length > 0) {
-                 placementNode = remainingNodes[Math.floor(Math.random() * remainingNodes.length)];
+               placementNode = remainingNodes[0];
              }
         }
 
@@ -298,6 +308,8 @@ const Board = ({ gameMode = 'player' }) => {
 
       setPlacements(currentPlacements);
       setDecks(currentDecks);
+
+      grantMoveBonus('p2');
       
       // Check Win Condition
       if (finalizeActionOutcome(currentPlacements, currentLeadersPositions)) return;
@@ -314,11 +326,18 @@ const Board = ({ gameMode = 'player' }) => {
         const newPositions = { ...leadersPositions, p2: move.to };
         setLeadersPositions(newPositions);
         markLeaderMoved('p2');
+
+      grantMoveBonus('p2');
         
         if (finalizeActionOutcome(placements, newPositions)) return;
         
         // Nemesis Reaction
         if (startNemesisReactionIfNeeded('p2', placements, newPositions)) {
+        // Pause AI phase resolution until the forced Nemesis reaction is completed.
+        setPendingForcedResume({
+          type: 'nemesis',
+          resumeTurnLabel: currentTurn,
+        });
             // If Nemesis triggers, we need to handle it.
             // For AI, we should probably auto-resolve Nemesis too?
             // Or let the player handle their Nemesis if they have one.
@@ -346,6 +365,7 @@ const Board = ({ gameMode = 'player' }) => {
         });
         
         setPlacements(updatedPlacements);
+        grantMoveBonus('p2');
         
         // Update Deck boardNodeId reference
         const unit = placements.find(p => p.nodeId === move.unitId);
@@ -412,6 +432,7 @@ const Board = ({ gameMode = 'player' }) => {
         }
 
         setPlacements(updatedPlacements);
+        grantMoveBonus('p2');
 
         // Mark unit as moved (Action used)
         if (unitToMark) {
@@ -443,7 +464,7 @@ const Board = ({ gameMode = 'player' }) => {
         if (finalizeActionOutcome(updatedPlacements, leadersPositions)) return;
         endPhase();
     }
-  };
+  }
 
   // Helper Wrappers
   const hasLeaderMoved = (playerKey) => Boolean(movementTracker[playerKey]?.leader);
@@ -499,6 +520,7 @@ const Board = ({ gameMode = 'player' }) => {
     const payload = {
       leaders,
       currentTurn,
+      turnCount,
       leadersPositions,
       canPickFor,
       recruitPickRemaining,
@@ -511,9 +533,10 @@ const Board = ({ gameMode = 'player' }) => {
       gameLeaders,
       statusMessage,
       gameResult,
+      clocks,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [leaders, currentTurn, leadersPositions, canPickFor, recruitPickRemaining, p2RecruitBonusUsed, decks, placements, retiredCards, selectedSummon, movementTracker, gameLeaders, statusMessage, gameResult]);
+  }, [leaders, currentTurn, turnCount, leadersPositions, canPickFor, recruitPickRemaining, p2RecruitBonusUsed, decks, placements, retiredCards, selectedSummon, movementTracker, gameLeaders, statusMessage, gameResult, clocks]);
 
   const clearSavedGame = () => {
     if (typeof window === 'undefined') return;
@@ -525,6 +548,7 @@ const Board = ({ gameMode = 'player' }) => {
     const { leaders: freshGameLeaders, firstPlayerKey } = createGameLeaders();
     setLeaders(generateInitialLeaders());
     setCurrentTurn(playerKeyToLabel(firstPlayerKey));
+    setTurnCount(1);
     setLeadersPositions(createInitialLeaderPositions());
     setSelectedLeader(null);
     setSelectedNode(null);
@@ -541,6 +565,8 @@ const Board = ({ gameMode = 'player' }) => {
     setStatusMessage('');
     setGameResult(null);
     setAbilityContext(null);
+    setPendingForcedResume(null);
+    setClocks({ p1: TURN_TIME_SECONDS, p2: TURN_TIME_SECONDS });
   };
 
   const ensureLeaderSupply = useCallback(() => {
@@ -1051,6 +1077,7 @@ const Board = ({ gameMode = 'player' }) => {
     setSelectedNode(null);
     setStatusMessage(message ?? `${abilityMeta.abilityName} ability resolved.`);
     setLeadersPositions(leaderPositionsState);
+    grantMoveBonus(abilityMeta.playerKey);
     finalizeActionOutcome(placementsState, leaderPositionsState);
   };
 
@@ -1297,7 +1324,21 @@ const Board = ({ gameMode = 'player' }) => {
       setSelectedUnit(null);
       setSelectedLeader(null);
       setStatusMessage('Nemesis bergerak setelah Leader musuh bergerak.');
-      finalizeActionOutcome(updatedPlacements, leadersPositions);
+      grantMoveBonus(activePiece.playerKey);
+      const gameEnded = finalizeActionOutcome(updatedPlacements, leadersPositions);
+
+      // If Nemesis was a forced interruption (e.g., triggered during AI leader move),
+      // resume the paused phase after a short beat.
+      if (pendingForcedResume?.type === 'nemesis') {
+        const resumeTurnLabel = pendingForcedResume.resumeTurnLabel;
+        setPendingForcedResume(null);
+        if (!gameEnded && resumeTurnLabel) {
+          setTimeout(() => {
+            // Continue the mover's phase resolution (turn switch / recruit phase).
+            handlePostMove(resumeTurnLabel);
+          }, 450);
+        }
+      }
       return;
     }
 
@@ -2119,9 +2160,13 @@ const Board = ({ gameMode = 'player' }) => {
     }
   };
 
-  const toggleTurn = () => {
+  function toggleTurn() {
     if (isGameOver) return;
-    setCurrentTurn(prev => prev === 'Player 1' ? 'Player 2' : 'Player 1');
+    const nextTurn = currentTurn === 'Player 1' ? 'Player 2' : 'Player 1';
+    const nextKey = playerLabelToKey(nextTurn);
+    setCurrentTurn(nextTurn);
+    setTurnCount((prev) => (Number.isFinite(prev) ? prev + 1 : 2));
+    setClocks((prev) => ({ ...prev, [nextKey]: TURN_TIME_SECONDS }));
     setSelectedLeader(null);
     setSelectedUnit(null);
     setSelectedNode(null);
@@ -2130,7 +2175,102 @@ const Board = ({ gameMode = 'player' }) => {
     setSelectedSummon(null);
     resetMovementTracker();
     setStatusMessage('');
-  };
+  }
+
+  function handleTurnTimeout(ownerKey) {
+    if (isGameOver) return;
+
+    // Forced off-turn interaction (Nemesis) gets auto-resolved to prevent deadlocks.
+    if (abilityContext?.data?.isForced && abilityContext?.data?.allowOffTurn && abilityContext?.playerKey === ownerKey) {
+      if (abilityContext.id === 'nemesis') {
+        const fallbackId = abilityContext.highlightNodes?.[0];
+        const fallbackNode = nodes.find((n) => n.id === fallbackId);
+        if (fallbackNode) {
+          handleAbilityNodeInteraction(fallbackNode);
+          grantMoveBonus(ownerKey);
+        }
+      }
+      return;
+    }
+
+    // Forced placement (e.g. recruit token placement)
+    if (selectedSummon?.forced && selectedSummon.playerKey === ownerKey) {
+      const firstValid = nodes.find((n) =>
+        isValidPlacementNode(ownerKey, n) && isNodeEmpty(n.id, placements, leadersPositions)
+      );
+      if (firstValid) {
+        attemptPlacement(firstValid);
+        grantMoveBonus(ownerKey);
+      }
+      return;
+    }
+
+    // Normal timeout: end the turn.
+    if (playerLabelToKey(currentTurn) === ownerKey) {
+      setStatusMessage(`${playerKeyToLabel(ownerKey)} kehabisan waktu. Turn berakhir.`);
+      toggleTurn();
+    }
+  }
+
+  const timeoutGuardRef = useRef({});
+  useEffect(() => {
+    if (isGameOver) return;
+    const ownerKey = activeClockOwnerKey;
+    const remaining = clocks?.[ownerKey] ?? 0;
+    const guardKey = `${ownerKey}:${turnCount}:${abilityContext?.id ?? 'none'}:${Boolean(selectedSummon?.forced)}`;
+    if (remaining > 0) {
+      timeoutGuardRef.current[ownerKey] = null;
+      return;
+    }
+    if (timeoutGuardRef.current[ownerKey] === guardKey) return;
+    timeoutGuardRef.current[ownerKey] = guardKey;
+    handleTurnTimeout(ownerKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeClockOwnerKey, clocks, isGameOver, turnCount, abilityContext, selectedSummon, currentTurn]);
+
+  useEffect(() => {
+    if (isGameOver) return;
+    const ownerKey = activeClockOwnerKey;
+    const timer = setInterval(() => {
+      setClocks((prev) => {
+        const current = Math.max(0, Number(prev?.[ownerKey] ?? 0));
+        if (current <= 0) return prev;
+        return { ...prev, [ownerKey]: current - 1 };
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [activeClockOwnerKey, isGameOver]);
+
+  // --- AI Integration ---
+  useEffect(() => {
+    // If a forced interaction is active (e.g., Nemesis reaction), pause AI until resolved.
+    if (abilityContext?.data?.isForced) return;
+    if (gameMode === 'ai' && currentTurn === 'Player 2' && !isGameOver) {
+      const ai = new GameAI({
+        leaders,
+        decks,
+        placements,
+        leadersPositions,
+        currentTurn,
+        movementTracker,
+        retiredCards,
+        recruitPickRemaining,
+      });
+
+      const timer = setTimeout(() => {
+        const move = ai.decideMove('p2');
+        if (move) {
+          executeAIMove(move);
+        } else {
+          console.warn('AI found no valid move. Skipping turn.');
+          toggleTurn();
+        }
+      }, 1000);
+
+      return () => clearTimeout(timer);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abilityContext, currentTurn, gameMode, isGameOver, leaders, decks, placements, leadersPositions, movementTracker, recruitPickRemaining, retiredCards]);
 
   const endPhase = () => {
     if (isGameOver) return;
@@ -2214,6 +2354,11 @@ const Board = ({ gameMode = 'player' }) => {
         triggeredByLeaderKey: movedLeaderKey,
       },
     });
+
+    setClocks((prev) => ({
+      ...prev,
+      [nemesisOwnerKey]: TURN_TIME_SECONDS,
+    }));
 
     setStatusMessage(`Nemesis harus bergerak ${steps} langkah: ${playerKeyToLabel(nemesisOwnerKey)} pilih petak yang disorot.`);
     return true;
@@ -2344,6 +2489,8 @@ const Board = ({ gameMode = 'player' }) => {
         setSelectedNode(null);
         markLeaderMoved(leaderKey);
 
+        grantMoveBonus(leaderKey);
+
         // First resolve win/lose checks from the leader move itself.
         if (finalizeActionOutcome(placements, nextPositions)) {
           return;
@@ -2390,6 +2537,7 @@ const Board = ({ gameMode = 'player' }) => {
         setSelectedUnit(null);
         setSelectedNode(null);
         markUnitMoved(playerKey, selectedUnit.deckIndex, selectedUnit.tokenId ?? null);
+        grantMoveBonus(playerKey);
         finalizeActionOutcome(nextPlacements, leadersPositions);
       }
       return;
@@ -2536,6 +2684,8 @@ const Board = ({ gameMode = 'player' }) => {
       setPlacements(nextPlacements);
       setDecks(nextDecks);
 
+      grantMoveBonus(playerKey);
+
       // Continue forced placement for the next token (Cub)
       setSelectedSummon((prev) => (prev
         ? {
@@ -2573,6 +2723,8 @@ const Board = ({ gameMode = 'player' }) => {
     setDecks(nextDecks);
     setSelectedSummon(null);
     setStatusMessage('');
+
+    grantMoveBonus(playerKey);
     if (finalizeActionOutcome(nextPlacements, leadersPositions)) {
       return;
     }
@@ -2675,8 +2827,11 @@ const Board = ({ gameMode = 'player' }) => {
     >
       {/* Navbar */}
       <div className="w-full h-16 bg-white flex items-center justify-between px-8 shadow-md z-50">
-        <div className="text-2xl font-bold text-gray-800">
-          Current Turn: <span className={currentTurn === 'Player 1' ? 'text-red-500' : 'text-cyan-500'}>{currentTurn}</span>
+        <div className="flex flex-col">
+          <div className="text-2xl font-bold text-gray-800">
+            Current Turn: <span className={currentTurn === 'Player 1' ? 'text-red-500' : 'text-cyan-500'}>{currentTurn}</span>
+          </div>
+          <div className="text-xs font-semibold text-gray-600">Turn {turnCount}</div>
         </div>
         <div className="text-center">
           <div className="text-sm font-bold tracking-wide text-gray-600 uppercase">{phaseInfo.label}</div>
@@ -2699,8 +2854,8 @@ const Board = ({ gameMode = 'player' }) => {
           )}
           <button
             onClick={() => endPhase()}
-            disabled={selectedSummon?.forced}
-            className={`bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-5 rounded shadow transition-colors ${selectedSummon?.forced ? 'opacity-50 cursor-not-allowed' : ''}`}
+            disabled={selectedSummon?.forced || abilityContext?.data?.isForced}
+            className={`bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-5 rounded shadow transition-colors ${(selectedSummon?.forced || abilityContext?.data?.isForced) ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             End Phase
           </button>
@@ -2870,7 +3025,12 @@ const Board = ({ gameMode = 'player' }) => {
       <div className={`flex flex-col justify-between h-full py-8 z-10 ml-auto gap-6 ${playerDeckShiftClass}`}>
         {/* Player 1 (Opponent) */}
         <div className="flex flex-col items-end gap-3">
-          <span className="text-red-400 font-bold text-2xl mr-2 drop-shadow-md tracking-wide">Player 1 Deck ({decks.p1.filter(Boolean).length})</span>
+          <div className="flex items-baseline gap-3 mr-2">
+            <span className={`text-sm font-bold ${activeClockOwnerKey === 'p1' ? 'text-red-500' : 'text-gray-600'}`}>
+              {gameMode === 'ai' ? 'Player' : 'Player 1'} {formatClock(clocks.p1)}
+            </span>
+            <span className="text-red-400 font-bold text-2xl drop-shadow-md tracking-wide">Player 1 Deck ({decks.p1.filter(Boolean).length})</span>
+          </div>
           <div className="bg-white/95 border-2 border-[#d2c2ac] rounded-[28px] px-6 py-4 shadow-[0_18px_35px_rgba(0,0,0,0.35)]">
             <div className="flex items-center gap-5">
               <div className="flex flex-col items-center gap-1">
@@ -2925,15 +3085,20 @@ const Board = ({ gameMode = 'player' }) => {
 
         {/* Player 2 (You) */}
         <div className="flex flex-col items-end gap-3">
-          <span className="text-cyan-400 font-bold text-2xl mr-2 drop-shadow-md tracking-wide">Player 2 Deck ({decks.p2.filter(Boolean).length})</span>
+          <div className="flex items-baseline gap-3 mr-2">
+            <span className={`text-sm font-bold ${activeClockOwnerKey === 'p2' ? 'text-cyan-300' : 'text-gray-300'}`}>
+              {gameMode === 'ai' ? 'AI' : 'Player 2'} {formatClock(clocks.p2)}
+            </span>
+            <span className="text-cyan-400 font-bold text-2xl drop-shadow-md tracking-wide">Player 2 Deck ({decks.p2.filter(Boolean).length})</span>
+          </div>
           <div className="bg-black/90 border-2 border-[#4f3d31] rounded-[28px] px-6 py-4 shadow-[0_18px_35px_rgba(0,0,0,0.55)]">
             <div className="flex items-center gap-5">
               <div className="flex flex-col items-center gap-1">
                 <CardSlot image={gameLeaders.p2.handImage} bgColor="bg-black" borderColor="border-[#f6dcb5]" />
-                <span className="text-xs font-semibold tracking-[0.2em] text-white uppercase">Leader</span>
               </div>
               <div className="flex gap-3">
                 {DECK_INDEXES.map(idx => {
+                  <span className="text-cyan-400 font-bold text-2xl drop-shadow-md tracking-wide">Player 2 Deck ({decks.p2.filter(Boolean).length})</span>
                   const card = decks.p2[idx];
                   const cardPlacements = placements.filter(p => p.playerKey === 'p2' && p.deckIndex === idx);
                   const deployed = cardPlacements.length > 0;
