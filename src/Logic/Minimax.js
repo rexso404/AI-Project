@@ -31,6 +31,50 @@ const NODE_MAP = new Map(NODES.map(n => [n.id, n]));
 const MAX_DEPTH = 4; // Optimal depth for web
 const INFINITY = 1000000;
 
+// Heuristik ringan untuk mengurutkan langkah (membantu pruning dan hindari pembukaan kaku)
+const manhattanDist = (idA, idB) => {
+    const a = NODE_MAP.get(idA);
+    const b = NODE_MAP.get(idB);
+    if (!a || !b) return 0;
+    return Math.abs(a.col - b.col) + Math.abs(a.row - b.row);
+};
+
+const scoreMoveHeuristic = (state, move, currentPlayer) => {
+    const enemyKey = currentPlayer === 'p1' ? 'p2' : 'p1';
+    const enemyLeaderId = state.leadersPositions[enemyKey];
+    const ownLeaderId = state.leadersPositions[currentPlayer];
+
+    let score = 0;
+
+    // Urutan jenis aksi
+    if (move.type === 'USE_ABILITY') score += 3;
+    else if (move.type === 'MOVE_UNIT') score += 2;
+    else if (move.type === 'MOVE_LEADER') score += 1;
+
+    // Lebih dekat ke leader musuh diprioritaskan
+    if (move.to != null && move.unitId != null) {
+        const before = manhattanDist(move.unitId, enemyLeaderId);
+        const after = manhattanDist(move.to, enemyLeaderId);
+        score += (before - after) * 4;
+    }
+
+    // Leader sendiri: sedikit hindari maju tanpa alasan
+    if (move.type === 'MOVE_LEADER' && move.to != null) {
+        const before = manhattanDist(ownLeaderId, enemyLeaderId);
+        const after = manhattanDist(move.to, enemyLeaderId);
+        score += (after - before);
+    }
+
+    // Jitter kecil agar tidak deterministik
+    score += Math.random() * 0.01;
+
+    return score;
+};
+
+const orderMovesByHeuristic = (state, moves, currentPlayer) => {
+    return [...moves].sort((a, b) => scoreMoveHeuristic(state, b, currentPlayer) - scoreMoveHeuristic(state, a, currentPlayer));
+};
+
 // =========================================================================
 // CHECKMATE DETECTION HELPERS
 // =========================================================================
@@ -494,7 +538,9 @@ const minimax = (state, depth, alpha, beta, isMaximizing, aiPlayerKey, isRecruit
     const currentPlayer = isMaximizing ? aiPlayerKey : (aiPlayerKey === 'p1' ? 'p2' : 'p1');
     const possibleMoves = getAllPossibleMoves(state, currentPlayer, isRecruitment);
 
-    if (possibleMoves.length === 0) {
+    const orderedMoves = orderMovesByHeuristic(state, possibleMoves, currentPlayer);
+
+    if (orderedMoves.length === 0) {
         return { score: evaluateState(state, aiPlayerKey, null) };
     }
 
@@ -502,7 +548,7 @@ const minimax = (state, depth, alpha, beta, isMaximizing, aiPlayerKey, isRecruit
 
     if (isMaximizing) {
         let maxEval = -INFINITY;
-        for (const move of possibleMoves) {
+        for (const move of orderedMoves) {
             const nextState = applyMove(state, move);
             const evalResult = minimax(nextState, depth - 1, alpha, beta, false, aiPlayerKey, isRecruitment);
             
@@ -516,7 +562,7 @@ const minimax = (state, depth, alpha, beta, isMaximizing, aiPlayerKey, isRecruit
         return { score: maxEval, move: bestMove };
     } else {
         let minEval = INFINITY;
-        for (const move of possibleMoves) {
+        for (const move of orderedMoves) {
             const nextState = applyMove(state, move);
             const evalResult = minimax(nextState, depth - 1, alpha, beta, true, aiPlayerKey, isRecruitment);
             
