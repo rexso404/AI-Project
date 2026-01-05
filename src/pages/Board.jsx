@@ -31,6 +31,7 @@ import {
   getBoardAssetForPlayer,
   extractPortraitKey,
   getCardMetaFromAlias,
+  evaluateLeaderState,
   isDualCharacter,
   buildPlacementRecord,
   getAdjacentNodeIds,
@@ -158,6 +159,7 @@ const Board = ({ gameMode = 'player' }) => {
   const [movementTracker, setMovementTracker] = useState(() => savedGame?.movementTracker ?? createMovementTracker());
   const [selectedUnit, setSelectedUnit] = useState(null);
   const [statusMessage, setStatusMessage] = useState(() => savedGame?.statusMessage ?? '');
+  const [turnExplanation, setTurnExplanation] = useState(() => savedGame?.turnExplanation ?? '');
   const [gameResult, setGameResult] = useState(() => savedGame?.gameResult ?? null);
   const [abilityContext, setAbilityContext] = useState(null);
   const [pendingForcedResume, setPendingForcedResume] = useState(null);
@@ -194,6 +196,30 @@ const Board = ({ gameMode = 'player' }) => {
     return `${mm}:${ss}`;
   };
 
+  const labelForPlayerKey = useCallback((playerKey) => {
+    // Used only for the chatty explanation box.
+    if (gameMode === 'ai') {
+      return playerKey === 'p1' ? 'Kamu' : 'Aku';
+    }
+    return playerKeyToLabel(playerKey);
+  }, [gameMode]);
+
+  const formatNodeLabel = useCallback((nodeId) => {
+    const node = nodeMap.get(nodeId);
+    if (!node) return `petak ${nodeId}`;
+    return `petak ${nodeId} (C${node.col}R${node.row})`;
+  }, [nodeMap]);
+
+  const buildMoveReason = useCallback((beforeState, afterState) => {
+    if ((beforeState?.captured || beforeState?.surrounded) && !(afterState?.captured || afterState?.surrounded)) {
+      return 'biar leader-ku lebih aman';
+    }
+    if (!(beforeState?.captured || beforeState?.surrounded) && (afterState?.captured || afterState?.surrounded)) {
+      return 'karena aku lagi ngejar posisi agresif (sedikit riskan)';
+    }
+    return 'biar posisiku lebih enak';
+  }, []);
+
   const activeClockOwnerKey = useMemo(() => {
     if (abilityContext?.data?.isForced && abilityContext?.data?.allowOffTurn && abilityContext?.playerKey) {
       return abilityContext.playerKey;
@@ -225,6 +251,12 @@ const Board = ({ gameMode = 'player' }) => {
     console.log("Executing AI Move:", move);
 
     if (move.type === 'RECRUIT') {
+      if (gameMode === 'ai') {
+        const recruitCard = move.card ?? leaders[move.index];
+        const recruitName = getCardDisplayName(recruitCard) || move.cardKey || 'champion';
+        const dualHint = ['vieilours', 'hermitandcub'].includes(move.cardKey) ? ' (bonus 2 unit!)' : '';
+        setTurnExplanation(`Aku ambil ${recruitName}${dualHint} soalnya nilainya paling oke.`);
+      }
       // 1. Find empty slot in deck
       const emptySlot = decks.p2.findIndex(c => c === null);
       if (emptySlot === -1) {
@@ -366,6 +398,15 @@ const Board = ({ gameMode = 'player' }) => {
       }
 
     } else if (move.type === 'MOVE_LEADER') {
+      if (gameMode === 'ai') {
+        const fromNodeId = leadersPositions.p2;
+        const toNodeId = move.to;
+        const beforeSelf = evaluateLeaderState('p2', placements, leadersPositions);
+        const afterPositions = { ...leadersPositions, p2: toNodeId };
+        const afterSelf = evaluateLeaderState('p2', placements, afterPositions);
+        const reason = buildMoveReason(beforeSelf, afterSelf);
+        setTurnExplanation(`Aku geser Leader dari ${formatNodeLabel(fromNodeId)} ke ${formatNodeLabel(toNodeId)} ${reason}.`);
+      }
       const newPositions = { ...leadersPositions, p2: move.to };
       setLeadersPositions(newPositions);
       markLeaderMoved('p2');
@@ -387,6 +428,29 @@ const Board = ({ gameMode = 'player' }) => {
       setAiThinking(false);
 
     } else if (move.type === 'MOVE_UNIT') {
+        if (gameMode === 'ai') {
+          const unit = placements.find(p => p.nodeId === move.unitId);
+          const deckCard = unit ? decks.p2?.[unit.deckIndex] : null;
+          const unitName = deckCard?.abilityName || getCardMetaFromAlias(unit?.cardKey)?.abilityName || unit?.cardKey || 'unit';
+
+          const updatedPlacementsPreview = placements.map(p => {
+            if (p.nodeId === move.unitId) return { ...p, nodeId: move.to };
+            return p;
+          });
+          const beforeEnemy = evaluateLeaderState('p1', placements, leadersPositions);
+          const afterEnemy = evaluateLeaderState('p1', updatedPlacementsPreview, leadersPositions);
+          const beforeSelf = evaluateLeaderState('p2', placements, leadersPositions);
+          const afterSelf = evaluateLeaderState('p2', updatedPlacementsPreview, leadersPositions);
+
+          let reason = 'memperbaiki posisi menurut evaluasi AI';
+          if ((beforeSelf.captured || beforeSelf.surrounded) && !(afterSelf.captured || afterSelf.surrounded)) {
+            reason = 'biar leader-ku nggak kepress';
+          } else if (!(beforeEnemy.captured || beforeEnemy.surrounded) && (afterEnemy.captured || afterEnemy.surrounded)) {
+            reason = 'buat ngasih tekanan ke leader kamu';
+          }
+
+          setTurnExplanation(`Aku geser ${unitName} dari ${formatNodeLabel(move.unitId)} ke ${formatNodeLabel(move.to)} ${reason}.`);
+        }
         const updatedPlacements = placements.map(p => {
             if (p.nodeId === move.unitId) {
                 return { ...p, nodeId: move.to };
@@ -608,11 +672,12 @@ const Board = ({ gameMode = 'player' }) => {
       movementTracker,
       gameLeaders,
       statusMessage,
+      turnExplanation,
       gameResult,
       clocks,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  }, [leaders, currentTurn, turnCount, leadersPositions, canPickFor, recruitPickRemaining, p2RecruitBonusUsed, decks, placements, retiredCards, selectedSummon, movementTracker, gameLeaders, statusMessage, gameResult, clocks]);
+  }, [leaders, currentTurn, turnCount, leadersPositions, canPickFor, recruitPickRemaining, p2RecruitBonusUsed, decks, placements, retiredCards, selectedSummon, movementTracker, gameLeaders, statusMessage, turnExplanation, gameResult, clocks]);
 
   const clearSavedGame = () => {
     if (typeof window === 'undefined') return;
@@ -639,6 +704,7 @@ const Board = ({ gameMode = 'player' }) => {
     setSelectedUnit(null);
     setGameLeaders(freshGameLeaders);
     setStatusMessage('');
+    setTurnExplanation('');
     setGameResult(null);
     setAbilityContext(null);
     setPendingForcedResume(null);
@@ -2734,6 +2800,9 @@ const Board = ({ gameMode = 'player' }) => {
       const reachable = getLeaderReachableNodeIds(leaderKey, fromNode, leaderSteps, placements, leadersPositions);
 
       if (reachable.has(toNode)) {
+        if (gameMode === 'ai') {
+          setTurnExplanation(`${labelForPlayerKey(leaderKey)} geser Leader dari ${formatNodeLabel(fromNode)} ke ${formatNodeLabel(toNode)}.`);
+        }
         const nextPositions = {
           ...leadersPositions,
           [leaderKey]: toNode,
@@ -2768,6 +2837,11 @@ const Board = ({ gameMode = 'player' }) => {
       const toNode = nodeId;
       if (isNodeEmpty(toNode, placements, leadersPositions) && isWithinMoveRange(nodes, fromNode, toNode)) {
         const playerKey = selectedUnit.playerKey;
+        if (gameMode === 'ai') {
+          const unitCard = decks[playerKey]?.[selectedUnit.deckIndex];
+          const unitName = unitCard?.abilityName || getCardMetaFromAlias(selectedUnit.cardKey)?.abilityName || selectedUnit.cardKey || 'unit';
+          setTurnExplanation(`${labelForPlayerKey(playerKey)} geser ${unitName} dari ${formatNodeLabel(fromNode)} ke ${formatNodeLabel(toNode)}.`);
+        }
         const nextPlacements = placements.map(piece => {
           const isSamePiece =
             piece.playerKey === playerKey
@@ -2854,6 +2928,11 @@ const Board = ({ gameMode = 'player' }) => {
       setCanPickFor(null);
       toggleTurn();
       return;
+    }
+
+    if (gameMode === 'ai') {
+      const name = getCardDisplayName(card) || cardInfo?.abilityName || cardKey;
+      setTurnExplanation(`${labelForPlayerKey(playerKey)} ambil ${name}. Kayaknya ini pilihan bagus`);
     }
 
     const updatedRetired = retiredCards.includes(card) ? retiredCards : [...retiredCards, card];
@@ -3296,6 +3375,14 @@ const Board = ({ gameMode = 'player' }) => {
         {/* Player 1 (Opponent) */}
         <div className="flex flex-col items-end gap-3">
           <div className="flex items-baseline gap-3 mr-2">
+            {gameMode === 'ai' && !isGameOver && (
+              <div className="flex items-start gap-2 bg-white/85 border border-gray-200 rounded-lg px-3 py-2 max-w-[380px]">
+                <span className="text-[10px] font-bold tracking-wider uppercase text-gray-600 whitespace-nowrap">Alasan</span>
+                <span className="text-xs font-semibold text-gray-800 leading-snug break-words">
+                  {turnExplanation || 'Belum ada apa-apa. Ayo mulai giliranmu.'}
+                </span>
+              </div>
+            )}
             <span className={`text-sm font-bold ${activeClockOwnerKey === 'p1' ? 'text-red-500' : 'text-gray-600'}`}>
               {gameMode === 'ai' ? 'Player' : 'Player 1'} {formatClock(clocks.p1)}
             </span>
