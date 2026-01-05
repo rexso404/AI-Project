@@ -219,6 +219,221 @@ const extractCardKey = (cardUrl) => {
     return PORTRAIT_KEY_MAPPING[normalized] ?? normalized;
 };
 
+// =========================================================================
+// STRATEGIC PLACEMENT SCORING
+// =========================================================================
+
+// Unit role classifications for placement strategy
+const OFFENSIVE_UNITS = ['assassin', 'lancegrappin', 'cogneur', 'acrobate', 'cavalier', 'archere'];
+const DEFENSIVE_UNITS = ['garderoyal', 'protecteur', 'geolier', 'vizir'];
+const MOBILE_UNITS = ['acrobate', 'cavalier', 'rodeuse', 'garderoyal'];
+const CONTROL_UNITS = ['manipulatrice', 'illusionniste', 'tavernier', 'cogneur', 'lancegrappin'];
+
+/**
+ * Scores a placement position for a unit during recruitment.
+ * Higher score = better placement.
+ * 
+ * @param {Object} node - The board node to evaluate
+ * @param {string} cardKey - The character being placed
+ * @param {Array} placements - Current board placements
+ * @param {Object} leadersPositions - Leader positions { p1: nodeId, p2: nodeId }
+ * @param {string} aiPlayerKey - The AI's player key ('p1' or 'p2')
+ * @returns {number} Score for this placement position
+ */
+export const scorePlacementPosition = (node, cardKey, placements, leadersPositions, aiPlayerKey = 'p2') => {
+    let score = 0;
+    const enemyKey = aiPlayerKey === 'p1' ? 'p2' : 'p1';
+    
+    const enemyLeaderNodeId = leadersPositions[enemyKey];
+    const ownLeaderNodeId = leadersPositions[aiPlayerKey];
+    const enemyLeaderNode = NODE_MAP.get(enemyLeaderNodeId);
+    const ownLeaderNode = NODE_MAP.get(ownLeaderNodeId);
+    
+    if (!enemyLeaderNode || !ownLeaderNode) return 0;
+    
+    // Calculate distances
+    const distToEnemy = Math.abs(node.col - enemyLeaderNode.col) + Math.abs(node.y - enemyLeaderNode.y);
+    const distToOwnLeader = Math.abs(node.col - ownLeaderNode.col) + Math.abs(node.y - ownLeaderNode.y);
+    
+    // Center column preference (column 3 is center in 0-6 range)
+    const centerCol = 3;
+    const centerBonus = (3 - Math.abs(node.col - centerCol)) * 8;
+    score += centerBonus;
+    
+    // === OFFENSIVE UNITS: Prefer positions closer to enemy leader ===
+    if (OFFENSIVE_UNITS.includes(cardKey)) {
+        // Closer to enemy = higher score (max ~10 distance on this board)
+        score += Math.max(0, (12 - distToEnemy)) * 15;
+        
+        // Assassin specifically wants to be in striking range
+        if (cardKey === 'assassin') {
+            if (distToEnemy <= 3) score += 50; // Very close
+            if (distToEnemy <= 5) score += 30; // Threatening range
+        }
+        
+        // Archer (archere) prefers to be on same row/column as enemy for line of sight
+        if (cardKey === 'archere') {
+            if (node.col === enemyLeaderNode.col) score += 40; // Same column
+            if (Math.abs(node.y - enemyLeaderNode.y) < 1) score += 30; // Similar row
+        }
+        
+        // Lancegrappin benefits from diagonal positioning
+        if (cardKey === 'lancegrappin') {
+            // Prefer positions where it can threaten multiple directions
+            const adjacents = getAdjacentNodeIds(NODES, node.id);
+            score += adjacents.length * 5; // More adjacent nodes = more pull options
+        }
+    }
+    
+    // === DEFENSIVE UNITS: Prefer positions near own leader ===
+    if (DEFENSIVE_UNITS.includes(cardKey)) {
+        // Closer to own leader = higher score
+        score += Math.max(0, (8 - distToOwnLeader)) * 12;
+        
+        // Adjacent to leader is ideal for defense
+        const ownLeaderAdjacents = getAdjacentNodeIds(NODES, ownLeaderNodeId);
+        if (ownLeaderAdjacents.includes(node.id)) {
+            score += 60; // Strong defensive position
+        }
+        
+        // Royal Guard (garderoyal) wants to be 1-2 spaces from leader
+        if (cardKey === 'garderoyal') {
+            if (distToOwnLeader === 1) score += 40;
+            if (distToOwnLeader === 2) score += 25;
+        }
+        
+        // Jailer (geolier) is effective when blocking paths
+        if (cardKey === 'geolier') {
+            // Check if this position blocks enemy approach to leader
+            const enemyApproachCol = ownLeaderNode.col < centerCol ? ownLeaderNode.col + 1 : ownLeaderNode.col - 1;
+            if (node.col === enemyApproachCol) score += 30;
+        }
+    }
+    
+    // === MOBILE UNITS: Prefer flexible central positions ===
+    if (MOBILE_UNITS.includes(cardKey) && !OFFENSIVE_UNITS.includes(cardKey) && !DEFENSIVE_UNITS.includes(cardKey)) {
+        // Mobile units benefit from central positions for flexibility
+        score += centerBonus * 1.5;
+        
+        // Wanderer (rodeuse) can teleport, so starting position less critical
+        // but still prefer central for options
+        if (cardKey === 'rodeuse') {
+            score += centerBonus;
+        }
+    }
+    
+    // === CONTROL UNITS: Prefer positions with many adjacent targets ===
+    if (CONTROL_UNITS.includes(cardKey)) {
+        const adjacents = getAdjacentNodeIds(NODES, node.id);
+        score += adjacents.length * 8; // More options = better
+        
+        // Illusionist wants to be near both allies and enemies for swap options
+        if (cardKey === 'illusionniste') {
+            // Count nearby units (both friendly and enemy)
+            let nearbyUnits = 0;
+            adjacents.forEach(adjId => {
+                const occupant = getNodeOccupant(adjId, leadersPositions, placements);
+                if (occupant) nearbyUnits++;
+            });
+            score += nearbyUnits * 15;
+        }
+        
+        // Brewmaster (tavernier) wants to be near allies
+        if (cardKey === 'tavernier') {
+            let nearbyAllies = 0;
+            adjacents.forEach(adjId => {
+                const occupant = getNodeOccupant(adjId, leadersPositions, placements);
+                if (occupant && occupant.playerKey === aiPlayerKey) nearbyAllies++;
+            });
+            score += nearbyAllies * 20;
+        }
+    }
+    
+    // === SPECIAL CASES ===
+    
+    // Hermit & Cub (vieilours/ourson) - Hermit should be positioned defensively
+    if (cardKey === 'vieilours' || cardKey === 'hermitandcub') {
+        score += Math.max(0, (8 - distToOwnLeader)) * 10;
+    }
+    // Cub is defensive blocker
+    if (cardKey === 'ourson') {
+        score += Math.max(0, (6 - distToOwnLeader)) * 8;
+        // Adjacent to leader is good for blocking
+        const ownLeaderAdjacents = getAdjacentNodeIds(NODES, ownLeaderNodeId);
+        if (ownLeaderAdjacents.includes(node.id)) {
+            score += 35;
+        }
+    }
+    
+    // Nemesis - unpredictable, prefer positions that aren't too close to own leader
+    if (cardKey === 'nemesis') {
+        if (distToOwnLeader >= 3) score += 20; // Keep away from own leader
+        score += Math.max(0, (10 - distToEnemy)) * 8; // But close to enemy
+    }
+    
+    // === AVOID BAD POSITIONS ===
+    
+    // Penalty for being too close to existing enemy units (vulnerable)
+    placements.forEach(p => {
+        if (p.playerKey === enemyKey) {
+            const enemyNode = NODE_MAP.get(p.nodeId);
+            if (enemyNode) {
+                const distToEnemy = Math.abs(node.col - enemyNode.col) + Math.abs(node.y - enemyNode.y);
+                if (distToEnemy === 1) {
+                    // Adjacent to enemy on placement is risky
+                    score -= 25;
+                    // Extra penalty if the enemy is a high-threat unit
+                    if (HIGH_THREAT_ABILITIES.includes(p.cardKey)) {
+                        score -= 30;
+                    }
+                }
+            }
+        }
+    });
+    
+    // Bonus for being near friendly units (mutual support)
+    let friendlyNeighbors = 0;
+    const adjacents = getAdjacentNodeIds(NODES, node.id);
+    adjacents.forEach(adjId => {
+        const occupant = getNodeOccupant(adjId, leadersPositions, placements);
+        if (occupant && occupant.playerKey === aiPlayerKey && occupant.type === 'unit') {
+            friendlyNeighbors++;
+        }
+    });
+    score += friendlyNeighbors * 10; // Mutual support bonus
+    
+    return score;
+};
+
+/**
+ * Finds the best placement position from a list of valid nodes.
+ * 
+ * @param {Array} validNodes - Array of valid placement nodes
+ * @param {string} cardKey - The character being placed
+ * @param {Array} placements - Current board placements
+ * @param {Object} leadersPositions - Leader positions
+ * @param {string} aiPlayerKey - The AI's player key
+ * @returns {Object} The best node to place the unit
+ */
+export const getBestPlacementNode = (validNodes, cardKey, placements, leadersPositions, aiPlayerKey = 'p2') => {
+    if (!validNodes || validNodes.length === 0) return null;
+    if (validNodes.length === 1) return validNodes[0];
+    
+    let bestNode = validNodes[0];
+    let bestScore = -Infinity;
+    
+    validNodes.forEach(node => {
+        const score = scorePlacementPosition(node, cardKey, placements, leadersPositions, aiPlayerKey);
+        if (score > bestScore) {
+            bestScore = score;
+            bestNode = node;
+        }
+    });
+    
+    console.log(`AI Placement: ${cardKey} -> Node ${bestNode.id} (Score: ${bestScore})`);
+    return bestNode;
+};
+
 /**
  * Main Entry Point for AI Decision
  */

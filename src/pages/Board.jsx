@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import { getBoardNodes } from '../Logic/Board';
 import { GameAI } from '../Logic/GameAI';
-import { getBestMove } from '../Logic/Minimax';
+import { getBestMove, getBestPlacementNode } from '../Logic/Minimax';
 import { getRecruitmentValue, getDynamicWeight } from '../Logic/AIWeights';
 import {
   boardImg,
@@ -291,10 +291,9 @@ const Board = ({ gameMode = 'player' }) => {
         return;
       }
 
-      // Pick random valid node
-      // Pick a deterministic valid node to keep renders/analysis stable.
-      // Pick first valid node (deterministic for React strict mode)
-      const targetNode = validNodes[0];
+      // Use strategic placement scoring to find the best position
+      const cardKey = extractPortraitKey(card);
+      const targetNode = getBestPlacementNode(validNodes, cardKey, placements, leadersPositions, 'p2');
       
       // 5. Update Leaders pool - remove recruited card and draw replacement
       setLeaders(prev => {
@@ -315,7 +314,7 @@ const Board = ({ gameMode = 'player' }) => {
 
       // Place tokens
       tokenSequence.forEach((tokenId, idx) => {
-        // For second token, find another valid spot
+        // For second token, find another valid spot using strategic placement
         let placementNode = targetNode;
         if (idx > 0) {
              const remainingNodes = nodes.filter(n => {
@@ -326,7 +325,10 @@ const Board = ({ gameMode = 'player' }) => {
                        n.id !== targetNode.id;
              });
              if (remainingNodes.length > 0) {
-                 placementNode = remainingNodes[0];
+                 // Use strategic placement for the second token (Cub)
+                 // tokenId 1 = Hermit, tokenId 2 = Cub (ourson)
+                 const secondTokenKey = tokenId === 2 ? 'ourson' : cardKey;
+                 placementNode = getBestPlacementNode(remainingNodes, secondTokenKey, currentPlacements, currentLeadersPositions, 'p2');
              }
         }
 

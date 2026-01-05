@@ -344,6 +344,9 @@ export const evaluateLeaderState = (playerKey, placementsState, leaderPositionsS
   const enemyKey = playerKey === 'p1' ? 'p2' : 'p1';
   let allOccupied = adjacentIds.length > 0;
   let hasAssassinAdjacent = false;
+  
+  // Track enemy units adjacent to leader (for "surrounded by enemies" win condition)
+  let adjacentEnemyCount = 0;
 
   const leaderNode = nodeMap.get(leaderNodeId);
   const archerContributesFromRange = (archerNodeId) => {
@@ -377,6 +380,9 @@ export const evaluateLeaderState = (playerKey, placementsState, leaderPositionsS
     if (!occupant) {
       allOccupied = false;
     } else if (occupant.playerKey === enemyKey) {
+      // Count this as an adjacent enemy for the surrounded check
+      adjacentEnemyCount++;
+      
       // Hermit+Cub: the Cub cannot help capture the opponent's Leader.
       if (occupant.type === 'unit' && occupant.tokenId === 'cub') {
         return;
@@ -399,6 +405,7 @@ export const evaluateLeaderState = (playerKey, placementsState, leaderPositionsS
         captureContributors += 1;
       }
     }
+    // Note: If occupied by a friendly unit, allOccupied stays true but it's not an enemy
   });
 
   // Archer can contribute from 2 spaces away in a straight line (no visibility required).
@@ -412,10 +419,16 @@ export const evaluateLeaderState = (playerKey, placementsState, leaderPositionsS
   });
 
   const captured = captureContributors >= 2 || hasAssassinAdjacent;
+  
+  // "Surrounded" only counts as a loss if:
+  // 1. All adjacent spaces are occupied (no escape), AND
+  // 2. At least 2 of those spaces have ENEMY units (otherwise you're just protected by allies)
+  // This prevents the bug where having 2 allies + 1 enemy adjacent counts as "surrounded"
+  const surrounded = allOccupied && adjacentEnemyCount >= 2;
 
   return {
     captured,
-    surrounded: allOccupied,
+    surrounded,
   };
 };
 
