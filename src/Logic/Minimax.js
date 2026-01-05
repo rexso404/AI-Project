@@ -489,11 +489,12 @@ export const getBestMove = (gameState, aiPlayerKey) => {
     
     // 2. For Recruitment, use simple greedy selection based on weights
     if (isRecruitmentPhase) {
+        const enemyKey = aiPlayerKey === 'p1' ? 'p2' : 'p1';
         const recruitMoves = [];
         gameState.leaders.forEach((card, index) => {
             if (card) {
                 const cardKey = extractCardKey(card);
-                const value = getRecruitmentValue(cardKey);
+                const value = getRecruitmentValue(cardKey, { state: gameState, playerKey: aiPlayerKey, enemyKey });
                 recruitMoves.push({ type: 'RECRUIT', index, card, cardKey, value });
             }
         });
@@ -591,17 +592,22 @@ const evaluateState = (state, aiPlayerKey, outcome) => {
 
     // 1. Material Score (Units on Board)
     state.placements.forEach(p => {
-        const weight = getDynamicWeight(p.cardKey, state.decks[enemyKey]);
+        const opposingDeck = p.playerKey === aiPlayerKey ? state.decks[enemyKey] : state.decks[aiPlayerKey];
+        const weight = getDynamicWeight(p.cardKey, opposingDeck, {
+            state,
+            aiPlayerKey,
+            pieceOwnerKey: p.playerKey,
+        });
         if (p.playerKey === aiPlayerKey) score += weight;
         else score -= weight;
     });
 
     // 2. Hand Score (Potential)
     state.decks[aiPlayerKey]?.forEach(c => {
-        if (c) score += (getRecruitmentValue(c.cardKey) * 0.5); // Hand value is 50% of board value
+        if (c) score += (getRecruitmentValue(c.cardKey, { state, playerKey: aiPlayerKey, enemyKey }) * 0.5); // Hand value is 50% of board value
     });
     state.decks[enemyKey]?.forEach(c => {
-        if (c) score -= (getRecruitmentValue(c.cardKey) * 0.5);
+        if (c) score -= (getRecruitmentValue(c.cardKey, { state, playerKey: enemyKey, enemyKey: aiPlayerKey }) * 0.5);
     });
 
     // 3. Leader Safety (Crucial)
