@@ -10,6 +10,16 @@ import { FLOAT_TOLERANCE } from './GameConstants';
 const NODES = getBoardNodes();
 const NODE_MAP = new Map(NODES.map(n => [n.id, n]));
 
+// Protector rule: enemy abilities may not move the Protector or any adjacent allies
+const isProtectedFromEnemyAbility = (targetNodeId, targetPlayerKey, placements, leadersPositions) => {
+    if (targetNodeId == null || !targetPlayerKey) return false;
+    const protectors = placements.filter(p => p.playerKey === targetPlayerKey && p.cardKey === 'protecteur');
+    if (protectors.some(p => p.nodeId === targetNodeId)) return true; // Protector itself
+
+    const adjacents = getAdjacentNodeIds(NODES, targetNodeId);
+    return protectors.some(p => adjacents.includes(p.nodeId));
+};
+
 // --- Helper: Raycasting ---
 const normalizeVector = (dx, dy) => {
     const len = Math.hypot(dx, dy);
@@ -79,6 +89,9 @@ export const getManipulatorTargets = (originNodeId, playerKey, placements, leade
             // Line of sight blocks at the first occupied piece.
             // Must be non-adjacent: idx === 0 means the occupied piece is adjacent.
             if (idx > 0 && occ.playerKey === enemyKey) {
+                if (isProtectedFromEnemyAbility(nodeId, occ.playerKey, placements, leadersPositions)) {
+                    break; // dilindungi protector, tidak bisa dipindah
+                }
                 const key = `${occ.type}:${occ.playerKey}:${nodeId}`;
                 if (!seenTargets.has(key)) {
                     targets.push({
@@ -142,6 +155,10 @@ export const getClawLauncherTargets = (originNodeId, playerKey, placements, lead
             const key = `${occ.type}:${occ.playerKey}:${nodeId}`;
             if (!seenTargets.has(key)) {
                 const prevToTargetId = idx > 0 ? ray[idx - 1] : originNodeId;
+                // Untuk target musuh, hormati perlindungan Protector
+                if (occ.playerKey !== playerKey && isProtectedFromEnemyAbility(nodeId, occ.playerKey, placements, leadersPositions)) {
+                    break;
+                }
                 targets.push({
                     ...occ,
                     nodeId,
@@ -176,13 +193,16 @@ export const getBruiserTargets = (originNodeId, playerKey, placements, leadersPo
     return [
         ...placements
             .filter(unit => unit.playerKey === enemyKey && adjacentIds.includes(unit.nodeId))
+            .filter(unit => !isProtectedFromEnemyAbility(unit.nodeId, unit.playerKey, placements, leadersPositions))
             .map(unit => ({ ...unit, type: 'unit' })),
         {
             type: 'leader',
             playerKey: enemyKey,
             nodeId: leadersPositions[enemyKey],
         },
-    ].filter(enemy => enemy.nodeId && adjacentIds.includes(enemy.nodeId));
+    ]
+        .filter(enemy => enemy.nodeId && adjacentIds.includes(enemy.nodeId))
+        .filter(enemy => !isProtectedFromEnemyAbility(enemy.nodeId, enemy.playerKey, placements, leadersPositions));
 };
 
 export const getIllusionistTargets = (originNodeId, playerKey, placements, leadersPositions) => {
@@ -191,7 +211,7 @@ export const getIllusionistTargets = (originNodeId, playerKey, placements, leade
 
     const candidates = [
         ...placements
-            .filter(unit => unit.nodeId !== originNodeId) // Not self
+            .filter(unit => unit.nodeId !== originNodeId)
             .map(unit => ({ ...unit, type: 'unit' })),
         { type: 'leader', playerKey: 'p1', nodeId: leadersPositions.p1 },
         { type: 'leader', playerKey: 'p2', nodeId: leadersPositions.p2 },
@@ -222,6 +242,10 @@ export const getIllusionistTargets = (originNodeId, playerKey, placements, leade
             }
             currentX += stepX;
             currentY += stepY;
+        }
+        // Protector rule: Illusionist tidak boleh memindahkan musuh yang dilindungi Protector
+        if (target.playerKey && target.playerKey !== playerKey) {
+            return !isProtectedFromEnemyAbility(target.nodeId, target.playerKey, placements, leadersPositions);
         }
         return true;
     });
