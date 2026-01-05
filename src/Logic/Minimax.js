@@ -1,4 +1,4 @@
-import { getRecruitmentValue, getDynamicWeight, CHARACTER_WEIGHTS } from './AIWeights';
+import { getRecruitmentValue, getDynamicWeight, CHARACTER_WEIGHTS, getCounterPickBonus, getSynergyBonus } from './AIWeights';
 import { 
     evaluateLeaderState, 
     getAdjacentNodeIds, 
@@ -487,15 +487,41 @@ export const getBestMove = (gameState, aiPlayerKey) => {
     // 1. Determine Phase (Recruitment or Action)
     const isRecruitmentPhase = gameState.recruitPickRemaining > 0;
     
-    // 2. For Recruitment, use simple greedy selection based on weights
+    // 2. For Recruitment, use smart selection with counter-picking and synergy
     if (isRecruitmentPhase) {
         const enemyKey = aiPlayerKey === 'p1' ? 'p2' : 'p1';
+        const enemyDeck = gameState.decks[enemyKey] || [];
+        const ownDeck = gameState.decks[aiPlayerKey] || [];
+        const ownPlacements = gameState.placements?.filter(p => p?.playerKey === aiPlayerKey) || [];
+        
         const recruitMoves = [];
         gameState.leaders.forEach((card, index) => {
             if (card) {
                 const cardKey = extractCardKey(card);
-                const value = getRecruitmentValue(cardKey, { state: gameState, playerKey: aiPlayerKey, enemyKey });
-                recruitMoves.push({ type: 'RECRUIT', index, card, cardKey, value });
+                
+                // Base recruitment value (already includes context-aware adjustments)
+                let value = getRecruitmentValue(cardKey, { state: gameState, playerKey: aiPlayerKey, enemyKey });
+                
+                // Add counter-pick bonus based on enemy deck composition
+                const counterBonus = getCounterPickBonus(cardKey, enemyDeck);
+                value += counterBonus;
+                
+                // Add synergy bonus based on what we already have
+                const synergyBonus = getSynergyBonus(cardKey, ownDeck, ownPlacements);
+                value += synergyBonus;
+                
+                recruitMoves.push({ 
+                    type: 'RECRUIT', 
+                    index, 
+                    card, 
+                    cardKey, 
+                    value,
+                    debug: { 
+                        base: getRecruitmentValue(cardKey, { state: gameState, playerKey: aiPlayerKey, enemyKey }), 
+                        counter: counterBonus, 
+                        synergy: synergyBonus 
+                    } 
+                });
             }
         });
         

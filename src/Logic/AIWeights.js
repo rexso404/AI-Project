@@ -278,3 +278,131 @@ export const getDynamicWeight = (characterKey, enemyDeck = [], context = null) =
 
     return clamp(Math.round(weight), 0, 140);
 };
+
+/**
+ * Counter-pick analysis for recruitment.
+ * Returns bonus/penalty based on how well a character counters or is countered by enemy.
+ */
+export const getCounterPickBonus = (characterKey, enemyDeck = []) => {
+    let bonus = 0;
+    const enemyCards = (enemyDeck || []).filter(Boolean).map(c => c?.cardKey);
+    
+    // Hard counters give big bonuses
+    if (characterKey === 'geolier') {
+        // Jailer counters all active abilities
+        const activeAbilityCount = enemyCards.filter(k => 
+            ['acrobate', 'cavalier', 'rodeuse', 'illusionniste', 'garderoyal', 'lancegrappin', 'cogneur', 'manipulatrice', 'tavernier', 'assassin'].includes(k)
+        ).length;
+        bonus += activeAbilityCount * 12;
+    }
+    
+    if (characterKey === 'protecteur') {
+        // Protector counters displacement
+        const displacementCount = enemyCards.filter(k => 
+            ['cogneur', 'lancegrappin', 'manipulatrice', 'illusionniste'].includes(k)
+        ).length;
+        bonus += displacementCount * 18;
+    }
+    
+    if (characterKey === 'assassin') {
+        // Assassin is less valuable if enemy can disable or block it
+        if (enemyCards.includes('geolier')) bonus -= 30;
+        if (enemyCards.includes('protecteur')) bonus -= 10;
+    }
+    
+    // Mobile units are good against slow/passive setups
+    if (['acrobate', 'cavalier', 'rodeuse'].includes(characterKey)) {
+        const passiveCount = enemyCards.filter(k => 
+            ['protecteur', 'tavernier', 'ourson'].includes(k)
+        ).length;
+        bonus += passiveCount * 8;
+    }
+    
+    // Archere countered by high mobility
+    if (characterKey === 'archere') {
+        const mobilityCount = enemyCards.filter(k => 
+            ['acrobate', 'cavalier', 'rodeuse', 'illusionniste'].includes(k)
+        ).length;
+        bonus -= mobilityCount * 6;
+    }
+    
+    // Lancegrappin/Cogneur countered by Protector
+    if (['lancegrappin', 'cogneur', 'manipulatrice'].includes(characterKey)) {
+        if (enemyCards.includes('protecteur')) bonus -= 15;
+    }
+    
+    // Illusionniste countered by Jailer
+    if (characterKey === 'illusionniste') {
+        if (enemyCards.includes('geolier')) bonus -= 20;
+    }
+    
+    return bonus;
+};
+
+/**
+ * Calculate synergy bonus for a character based on what AI already has.
+ */
+export const getSynergyBonus = (cardKey, ownDeck = [], ownPlacements = []) => {
+    let bonus = 0;
+    const ownCards = [
+        ...(ownDeck || []).filter(Boolean).map(c => c?.cardKey),
+        ...(ownPlacements || []).filter(Boolean).map(p => p?.cardKey)
+    ];
+    
+    // Illusionist + Assassin combo: Can swap assassin into kill position
+    if (cardKey === 'illusionniste' && ownCards.includes('assassin')) bonus += 25;
+    if (cardKey === 'assassin' && ownCards.includes('illusionniste')) bonus += 25;
+    
+    // Tavernier + offensive units: Can reposition for attacks
+    if (cardKey === 'tavernier') {
+        if (ownCards.includes('assassin')) bonus += 20;
+        if (ownCards.includes('archere')) bonus += 15;
+        if (ownCards.includes('cogneur')) bonus += 12;
+        if (ownCards.includes('lancegrappin')) bonus += 10;
+    }
+    
+    // Lancegrappin + Cogneur: Displacement combo
+    if (cardKey === 'lancegrappin' && ownCards.includes('cogneur')) bonus += 15;
+    if (cardKey === 'cogneur' && ownCards.includes('lancegrappin')) bonus += 15;
+    
+    // Geolier + defensive units: Strong lockdown
+    if (cardKey === 'geolier' && ownCards.includes('garderoyal')) bonus += 12;
+    if (cardKey === 'garderoyal' && ownCards.includes('geolier')) bonus += 12;
+    
+    // Acrobate + Cavalier: High mobility duo for flanking
+    if (cardKey === 'acrobate' && ownCards.includes('cavalier')) bonus += 8;
+    if (cardKey === 'cavalier' && ownCards.includes('acrobate')) bonus += 8;
+    
+    // Vizir + defensive units: Leader can escape while units hold
+    if (cardKey === 'vizir') {
+        if (ownCards.includes('garderoyal')) bonus += 15;
+        if (ownCards.includes('protecteur')) bonus += 12;
+        if (ownCards.includes('geolier')) bonus += 10;
+    }
+    
+    // Hermit & Cub: Good for surrounding
+    if (cardKey === 'vieilours' || cardKey === 'hermitandcub') {
+        // Extra value if we have displacement to set up surrounds
+        if (ownCards.includes('cogneur')) bonus += 12;
+        if (ownCards.includes('lancegrappin')) bonus += 10;
+        if (ownCards.includes('manipulatrice')) bonus += 8;
+    }
+    
+    // Archere + control units: Zone control combo
+    if (cardKey === 'archere') {
+        if (ownCards.includes('geolier')) bonus += 10;
+        if (ownCards.includes('garderoyal')) bonus += 8;
+    }
+    
+    // Rodeuse + Assassin: Teleport assassin combo potential
+    if (cardKey === 'rodeuse' && ownCards.includes('assassin')) bonus += 10;
+    if (cardKey === 'assassin' && ownCards.includes('rodeuse')) bonus += 8;
+    
+    // Nemesis pairs well with mobile units (mirrors their moves)
+    if (cardKey === 'nemesis') {
+        const mobileCount = ownCards.filter(k => ['acrobate', 'cavalier', 'garderoyal'].includes(k)).length;
+        bonus += mobileCount * 6;
+    }
+    
+    return bonus;
+};
