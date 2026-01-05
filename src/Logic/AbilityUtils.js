@@ -60,49 +60,41 @@ const getRayFromNeighbor = (originId, firstId) => {
 // --- Ability Logic ---
 
 export const getManipulatorTargets = (originNodeId, playerKey, placements, leadersPositions) => {
-    const originNode = NODE_MAP.get(originNodeId);
-    if (!originNode) return [];
-
+    // Use the same hex "raycasting" as ClawLauncher so Manipulator sees in
+    // all straight-line directions on this board.
     const enemyKey = playerKey === 'p1' ? 'p2' : 'p1';
-    const enemyCandidates = [
-        ...placements
-            .filter(unit => unit.playerKey === enemyKey)
-            .map(unit => ({ ...unit, type: 'unit' })),
-        {
-            type: 'leader',
-            playerKey: enemyKey,
-            nodeId: leadersPositions[enemyKey],
-        },
-    ].filter(candidate => !!candidate.nodeId);
+    const adjacent = getAdjacentNodeIds(NODES, originNodeId);
+    const targets = [];
+    const seenTargets = new Set();
 
-    return enemyCandidates.filter(target => {
-        const targetNode = NODE_MAP.get(target.nodeId);
-        if (!targetNode) return false;
+    for (const firstId of adjacent) {
+        const ray = getRayFromNeighbor(originNodeId, firstId);
+        if (!ray.length) continue;
 
-        const sameCol = Math.abs(targetNode.x - originNode.x) <= FLOAT_TOLERANCE;
-        const sameRow = Math.abs(targetNode.y - originNode.y) <= FLOAT_TOLERANCE;
-        if (!sameCol && !sameRow) return false;
+        for (let idx = 0; idx < ray.length; idx += 1) {
+            const nodeId = ray[idx];
+            const occ = getNodeOccupant(nodeId, leadersPositions, placements);
+            if (!occ) continue;
 
-        const dx = targetNode.x - originNode.x;
-        const dy = targetNode.y - originNode.y;
-        if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) return false; // must be non-adjacent
-
-        const stepX = dx === 0 ? 0 : dx > 0 ? 1 : -1;
-        const stepY = dy === 0 ? 0 : dy > 0 ? 1 : -1;
-
-        let currentX = originNode.x + stepX;
-        let currentY = originNode.y + stepY;
-        while (Math.abs(currentX - targetNode.x) > FLOAT_TOLERANCE || Math.abs(currentY - targetNode.y) > FLOAT_TOLERANCE) {
-            const blocker = findNodeByCoordinates(NODES, currentX, currentY);
-            if (blocker) {
-                const occ = getNodeOccupant(blocker.id, leadersPositions, placements);
-                if (occ) return false;
+            // Line of sight blocks at the first occupied piece.
+            // Must be non-adjacent: idx === 0 means the occupied piece is adjacent.
+            if (idx > 0 && occ.playerKey === enemyKey) {
+                const key = `${occ.type}:${occ.playerKey}:${nodeId}`;
+                if (!seenTargets.has(key)) {
+                    targets.push({
+                        ...occ,
+                        nodeId,
+                        rayFirstId: firstId,
+                        prevToTargetId: ray[idx - 1] ?? originNodeId,
+                    });
+                    seenTargets.add(key);
+                }
             }
-            currentX += stepX;
-            currentY += stepY;
+            break;
         }
-        return true;
-    });
+    }
+
+    return targets;
 };
 
 export const getRoyalGuardMoves = (playerKey, placements, leadersPositions) => {
