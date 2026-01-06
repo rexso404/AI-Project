@@ -145,6 +145,10 @@ export const getDynamicWeight = (characterKey, enemyDeck = [], context = null) =
     const aiDeck = aiPlayerKey && decks ? (decks[aiPlayerKey] ?? []) : [];
     const enemyDeckFromAI = enemyKeyFromAI && decks ? (decks[enemyKeyFromAI] ?? []) : enemyDeck;
 
+    const aiPlacements = aiPlayerKey
+        ? placements.filter((p) => p?.playerKey === aiPlayerKey)
+        : [];
+
     // --- Baseline counters / role pressure ---
     const enemyHasDisplacement = enemyDeckFromAI.some((c) => ['cogneur', 'lancegrappin', 'manipulatrice'].includes(c?.cardKey));
     const enemyHasStrongActives = enemyDeckFromAI.some((c) => ['acrobate', 'garderoyal', 'illusionniste', 'assassin', 'archere'].includes(c?.cardKey));
@@ -276,6 +280,12 @@ export const getDynamicWeight = (characterKey, enemyDeck = [], context = null) =
             break;
     }
 
+    // --- Draft synergy/anti-synergy (only when evaluating an ALLY pick) ---
+    // Keeps gameplay threat-assessment stable (enemy pieces won't get these bonuses).
+    if (isAllyPiece) {
+        weight += getSynergyBonus(characterKey, aiDeck, aiPlacements);
+    }
+
     return clamp(Math.round(weight), 0, 140);
 };
 
@@ -348,6 +358,46 @@ export const getSynergyBonus = (cardKey, ownDeck = [], ownPlacements = []) => {
         ...(ownDeck || []).filter(Boolean).map(c => c?.cardKey),
         ...(ownPlacements || []).filter(Boolean).map(p => p?.cardKey)
     ];
+
+    // --- Anti-synergy: Assassin + Archer ---
+    // Archer helps capture from range but can't solo-capture; Assassin must go adjacent.
+    // Together this often creates a plan that's easy to parry: Assassin gets blocked/repelled
+    // while Archer can't finish alone. So if one is already picked, prefer supportive tools.
+    const ownHasAssassin = ownCards.includes('assassin');
+    const ownHasArcher = ownCards.includes('archere');
+
+    if (cardKey === 'assassin' && ownHasArcher) bonus -= 22;
+    if (cardKey === 'archere' && ownHasAssassin) bonus -= 22;
+
+    // When you already have a finisher (Assassin or Archer), prioritize cards that:
+    // - help capture setups (swap/pull/push/teleport), or
+    // - disrupt / deny enemy responses (jailer/protector), or
+    // - protect / reposition (royal guard/vizier/tavernier)
+    const supportiveKeys = [
+        'lancegrappin',   // pull/drag = create adjacency / break blocks
+        'cogneur',        // push = break formations
+        'manipulatrice',  // 1-step move = open lines / disrupt
+        'illusionniste',  // swap = tactics / rescue
+        'rodeuse',        // teleport = angle creation
+        'geolier',        // disable actives nearby
+        'protecteur',     // deny enemy displacement around you
+        'garderoyal',     // defend leader / reposition
+        'vizir',          // leader mobility = survival / tempo
+        'tavernier',      // small ally reposition
+    ];
+
+    const isSupportive = supportiveKeys.includes(cardKey);
+    if ((ownHasAssassin || ownHasArcher) && isSupportive) {
+        const supportiveCount = ownCards.filter((k) => supportiveKeys.includes(k)).length;
+        if (supportiveCount <= 1) bonus += 18;
+        else if (supportiveCount <= 2) bonus += 10;
+        else bonus += 6;
+
+        // Extra bias toward direct capture-enablers / movement disruption.
+        if (['lancegrappin', 'cogneur', 'manipulatrice', 'illusionniste', 'geolier', 'rodeuse'].includes(cardKey)) {
+            bonus += 6;
+        }
+    }
     
     // Illusionist + Assassin combo: Can swap assassin into kill position
     if (cardKey === 'illusionniste' && ownCards.includes('assassin')) bonus += 25;
