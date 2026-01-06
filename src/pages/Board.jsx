@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import { getBoardNodes } from '../Logic/Board';
 import { GameAI } from '../Logic/GameAI';
-import { getBestMove, getBestPlacementNode } from '../Logic/Minimax';
+import { getBestMove, getBestPlacementNode, chooseNemesisMove } from '../Logic/Minimax';
 import { getRecruitmentValue, getDynamicWeight } from '../Logic/AIWeights';
 import {
   boardImg,
@@ -2385,6 +2385,44 @@ const Board = ({ gameMode = 'player' }) => {
     return () => clearInterval(timer);
   }, [activeClockOwnerKey, isGameOver]);
 
+  // Auto-resolve forced Nemesis reaction for AI (so player doesn't need to click).
+  const nemesisAutoResolveRef = useRef(null);
+  useEffect(() => {
+    if (isGameOver) return;
+    if (gameMode !== 'ai') return;
+    if (!abilityContext || abilityContext.id !== 'nemesis') return;
+    if (!abilityContext.data?.isForced || !abilityContext.data?.allowOffTurn) return;
+    if (abilityContext.playerKey !== 'p2') return; // AI is Player 2 in this mode
+
+    const originNodeId = abilityContext.originNodeId;
+    const destinations = abilityContext.highlightNodes || [];
+    if (!originNodeId || destinations.length === 0) return;
+
+    const resolveKey = `${turnCount}:${abilityContext.deckIndex}:${abilityContext.tokenId ?? 'n'}:${originNodeId}:${destinations.join(',')}`;
+    if (nemesisAutoResolveRef.current === resolveKey) return;
+    nemesisAutoResolveRef.current = resolveKey;
+
+    const aiStateForEval = {
+      leaders,
+      decks,
+      placements,
+      leadersPositions,
+      currentTurn,
+      movementTracker,
+      retiredCards,
+      recruitPickRemaining,
+    };
+
+    const bestDest = chooseNemesisMove(aiStateForEval, 'p2', originNodeId, destinations, nodes);
+    const forcedNode = nodes.find((n) => n.id === bestDest);
+    if (!forcedNode) return;
+
+    // Defer one tick to ensure abilityContext highlight is rendered and state is settled.
+    const t = setTimeout(() => handleAbilityNodeInteraction(forcedNode), 0);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abilityContext, gameMode, isGameOver, turnCount, leaders, decks, placements, leadersPositions, movementTracker, retiredCards, recruitPickRemaining, nodes]);
+
   // --- AI Integration ---
   useEffect(() => {
     // If a forced interaction is active (e.g., Nemesis reaction), pause AI until resolved.
@@ -3380,7 +3418,7 @@ const Board = ({ gameMode = 'player' }) => {
             {gameMode === 'ai' && !isGameOver && (
               <div className="flex items-start gap-2 bg-white/85 border border-gray-200 rounded-lg px-3 py-2 max-w-[380px]">
                 <span className="text-[10px] font-bold tracking-wider uppercase text-gray-600 whitespace-nowrap">Alasan</span>
-                <span className="text-xs font-semibold text-gray-800 leading-snug break-words">
+                <span className="text-xs font-semibold text-gray-800 leading-snug wrap-break-word">
                   {turnExplanation || 'Belum ada apa-apa. Ayo mulai giliranmu.'}
                 </span>
               </div>

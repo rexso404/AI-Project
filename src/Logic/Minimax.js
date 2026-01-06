@@ -7,8 +7,6 @@ import {
     getRiderLandingOptions,
     getNodeOccupant,
     playerKeyToLabel,
-    playerLabelToKey,
-    buildPlacementRecord
 } from './GameUtils';
 import { getBoardNodes } from './Board';
 import {
@@ -73,6 +71,206 @@ const scoreMoveHeuristic = (state, move, currentPlayer) => {
 
 const orderMovesByHeuristic = (state, moves, currentPlayer) => {
     return [...moves].sort((a, b) => scoreMoveHeuristic(state, b, currentPlayer) - scoreMoveHeuristic(state, a, currentPlayer));
+};
+
+// =========================================================================
+// FORCED LINES (TACTICAL SCAN)
+// =========================================================================
+
+const otherPlayerKey = (playerKey) => (playerKey === 'p1' ? 'p2' : 'p1');
+
+// Keep forced-lines scan fast. These scans run BEFORE minimax.
+// If budget is exceeded, fall back to full minimax.
+const FORCED_SCAN_TOTAL_BUDGET_MS = 18;
+const FORCED_SCAN_PER_CALL_BUDGET_MS = 10;
+const FORCED_SCAN_MAX_CHECKS = 24;
+const FORCED_SCAN_MAX_CANDIDATES_MATE2 = 8;
+const FORCED_SCAN_MAX_ENEMY_REPLIES_MATE2 = 14;
+
+const isTimeUp = (startedAt, budgetMs) => (performance.now() - startedAt) >= budgetMs;
+
+const forcedScanSortKey = (state, move, currentPlayer) => {
+    // Strongly prefer abilities in tactical scan.
+    const abilityBonus = move.type === 'USE_ABILITY' ? 100000 : 0;
+    // Prefer moves that directly interact with leader lines: quick heuristic already favors proximity.
+    // Reuse existing heuristic for secondary ordering.
+    return abilityBonus + (scoreMoveHeuristic(state, move, currentPlayer) * 100);
+};
+
+const orderMovesForForcedScan = (state, moves, currentPlayer) => {
+    return [...moves].sort((a, b) => forcedScanSortKey(state, b, currentPlayer) - forcedScanSortKey(state, a, currentPlayer));
+};
+
+const didPlayerWin = (outcome, playerKey) => {
+    if (!outcome) return false;
+    return outcome.winner === playerKeyToLabel(playerKey);
+};
+
+// Try to find an immediate winning move (mate-in-1): any move that ends the game right away.
+const findImmediateWinMove = (state, playerKey, startedAt = performance.now(), budgetMs = FORCED_SCAN_PER_CALL_BUDGET_MS) => {
+    const moves = getAllPossibleMoves(state, playerKey, false);
+    const ordered = orderMovesForForcedScan(state, moves, playerKey);
+    let checked = 0;
+    for (const move of ordered) {
+        if (checked >= FORCED_SCAN_MAX_CHECKS || isTimeUp(startedAt, budgetMs)) break;
+        const nextState = applyMove(state, move);
+        const outcome = checkGameOver(nextState);
+        if (didPlayerWin(outcome, playerKey)) return move;
+        checked++;
+    }
+    return null;
+};
+
+// Returns true if the given player has ANY immediate winning move from this state.
+const hasImmediateWin = (state, playerKey, startedAt, budgetMs) => Boolean(findImmediateWinMove(state, playerKey, startedAt, budgetMs));
+
+// Collect up to N immediate winning moves (used for fast threat checks).
+const getImmediateWinningMoves = (state, playerKey, maxResults, startedAt, budgetMs) => {
+    const moves = getAllPossibleMoves(state, playerKey, false);
+    const ordered = orderMovesForForcedScan(state, moves, playerKey);
+    const wins = [];
+    let checked = 0;
+    for (const move of ordered) {
+        if (wins.length >= maxResults || checked >= FORCED_SCAN_MAX_CHECKS || isTimeUp(startedAt, budgetMs)) break;
+        const nextState = applyMove(state, move);
+        const outcome = checkGameOver(nextState);
+        if (didPlayerWin(outcome, playerKey)) wins.push(move);
+        checked++;
+    }
+    return wins;
+};
+
+// If enemy has a mate-in-1 threat, pick the best defensive move that removes all enemy mate-in-1 replies.
+// Uses minimax evaluation to choose among candidate defenses.
+const findBestDefenseAgainstMateIn1 = (state, aiPlayerKey) => {
+    const enemyKey = otherPlayerKey(aiPlayerKey);
+    const startedAt = performance.now();
+    const initialThreats = getImmediateWinningMoves(state, enemyKey, 6, startedAt, FORCED_SCAN_PER_CALL_BUDGET_MS);
+    if (initialThreats.length === 0) return null;
+
+    const aiMoves = orderMovesForForcedScan(state, getAllPossibleMoves(state, aiPlayerKey, false), aiPlayerKey);
+    const safeMoves = [];
+    let checked = 0;
+    for (const move of aiMoves) {
+        if (checked >= FORCED_SCAN_MAX_CHECKS || isTimeUp(startedAt, FORCED_SCAN_PER_CALL_BUDGET_MS)) break;
+        const nextState = applyMove(state, move);
+        // If this move already wins, it is also a valid defense.
+        const outcome = checkGameOver(nextState);
+        if (didPlayerWin(outcome, aiPlayerKey)) return move;
+
+        // Otherwise, ensure enemy no longer has a mate-in-1.
+        // For speed, we re-scan only a small number of winning replies within remaining budget.
+        const remainingBudget = Math.max(1, FORCED_SCAN_PER_CALL_BUDGET_MS - (performance.now() - startedAt));
+        const stillThreats = getImmediateWinningMoves(nextState, enemyKey, 2, performance.now(), remainingBudget);
+        if (stillThreats.length === 0) {
+            safeMoves.push(move);
+        }
+        checked++;
+    }
+
+    if (safeMoves.length === 0) return null;
+
+    let bestMove = safeMoves[0];
+    let bestScore = -INFINITY;
+    let alpha = -INFINITY;
+    let beta = INFINITY;
+
+    for (const move of safeMoves) {
+        const nextState = applyMove(state, move);
+        const evalResult = minimax(nextState, MAX_DEPTH - 1, alpha, beta, false, aiPlayerKey, false);
+        if (evalResult.score > bestScore) {
+            bestScore = evalResult.score;
+            bestMove = move;
+        }
+        alpha = Math.max(alpha, bestScore);
+    }
+
+    return bestMove;
+};
+
+// Forced win in 2 plies (mate-in-2): AI makes a move such that NO MATTER what enemy replies,
+// AI has an immediate win next. This is a tactical check to avoid missing short forced mates.
+const findForcedWinInTwo = (state, aiPlayerKey, maxCandidates = 12) => {
+    const enemyKey = otherPlayerKey(aiPlayerKey);
+    const startedAt = performance.now();
+    const candidateLimit = Math.min(maxCandidates, FORCED_SCAN_MAX_CANDIDATES_MATE2);
+    const aiMoves = orderMovesForForcedScan(state, getAllPossibleMoves(state, aiPlayerKey, false), aiPlayerKey).slice(0, candidateLimit);
+
+    for (const move of aiMoves) {
+        if (isTimeUp(startedAt, FORCED_SCAN_PER_CALL_BUDGET_MS)) break;
+        const afterAi = applyMove(state, move);
+        const outcome = checkGameOver(afterAi);
+        if (didPlayerWin(outcome, aiPlayerKey)) return move; // Already mate-in-1
+
+        const enemyReplies = orderMovesForForcedScan(afterAi, getAllPossibleMoves(afterAi, enemyKey, false), enemyKey)
+            .slice(0, FORCED_SCAN_MAX_ENEMY_REPLIES_MATE2);
+        if (enemyReplies.length === 0) continue;
+
+        let forced = true;
+        for (const reply of enemyReplies) {
+            if (isTimeUp(startedAt, FORCED_SCAN_PER_CALL_BUDGET_MS)) {
+                forced = false;
+                break;
+            }
+            const afterEnemy = applyMove(afterAi, reply);
+            const replyOutcome = checkGameOver(afterEnemy);
+            if (didPlayerWin(replyOutcome, enemyKey)) {
+                forced = false;
+                break;
+            }
+            const remainingBudget = Math.max(1, FORCED_SCAN_PER_CALL_BUDGET_MS - (performance.now() - startedAt));
+            if (!hasImmediateWin(afterEnemy, aiPlayerKey, performance.now(), remainingBudget)) {
+                forced = false;
+                break;
+            }
+        }
+        if (forced) return move;
+    }
+
+    return null;
+};
+
+// Lightweight helper for forced reactions (e.g., Nemesis). Returns the best destination id.
+// Uses the same evaluation brain so it stays consistent with main minimax scoring.
+export const chooseNemesisMove = (state, nemesisOwnerKey, originNodeId, destinationIds, nodesRef = null) => {
+    if (!Array.isArray(destinationIds) || destinationIds.length === 0) return null;
+
+    let bestDest = null;
+    let bestScore = -INFINITY;
+    const leaderPositions = state.leadersPositions || {};
+
+    for (const destId of destinationIds) {
+        const nextPlacements = state.placements.map((p) => {
+            if (p.playerKey === nemesisOwnerKey && p.cardKey === 'nemesis' && p.nodeId === originNodeId) {
+                return { ...p, nodeId: destId };
+            }
+            return p;
+        });
+
+        const nextState = {
+            ...state,
+            placements: nextPlacements,
+        };
+
+        // Use evaluateState directly (plyFromRoot = 0). Perspective = nemesis owner.
+        const score = evaluateState(nextState, nemesisOwnerKey, null, 0);
+        if (score > bestScore) {
+            bestScore = score;
+            bestDest = destId;
+        } else if (score === bestScore && nodesRef) {
+            const ownLeaderId = leaderPositions[nemesisOwnerKey];
+            const nodeA = nodesRef.find((n) => n.id === destId);
+            const nodeB = nodesRef.find((n) => n.id === bestDest);
+            const leaderNode = nodesRef.find((n) => n.id === ownLeaderId);
+            if (leaderNode && nodeA && nodeB) {
+                const distA = Math.abs(nodeA.col - leaderNode.col) + Math.abs(nodeA.row - leaderNode.row);
+                const distB = Math.abs(nodeB.col - leaderNode.col) + Math.abs(nodeB.row - leaderNode.row);
+                if (distA > distB) bestDest = destId;
+            }
+        }
+    }
+
+    return bestDest;
 };
 
 // =========================================================================
@@ -535,7 +733,37 @@ export const getBestMove = (gameState, aiPlayerKey) => {
         return bestRecruit;
     }
     
-    // 3. For Action Phase, use Minimax
+    // 3. For Action Phase, do tactical scan first (forced lines), then fallback to Minimax.
+    // A) Mate-in-1 (immediate win)
+    const forcedStart = performance.now();
+    const immediateWin = findImmediateWinMove(gameState, aiPlayerKey, forcedStart, FORCED_SCAN_PER_CALL_BUDGET_MS);
+    if (immediateWin) {
+        const end = performance.now();
+        console.log(`AI Forced Line: mate-in-1 found in ${(end - start).toFixed(2)}ms | Move:`, immediateWin);
+        return immediateWin;
+    }
+
+    // B) Must-defend against enemy mate-in-1
+    if (!isTimeUp(forcedStart, FORCED_SCAN_TOTAL_BUDGET_MS)) {
+        const defenseMove = findBestDefenseAgainstMateIn1(gameState, aiPlayerKey);
+        if (defenseMove) {
+            const end = performance.now();
+            console.log(`AI Forced Line: defended mate-in-1 in ${(end - start).toFixed(2)}ms | Move:`, defenseMove);
+            return defenseMove;
+        }
+    }
+
+    // C) Forced win in 2 plies (mate-in-2)
+    if (!isTimeUp(forcedStart, FORCED_SCAN_TOTAL_BUDGET_MS)) {
+        const forcedWin2 = findForcedWinInTwo(gameState, aiPlayerKey, FORCED_SCAN_MAX_CANDIDATES_MATE2);
+        if (forcedWin2) {
+            const end = performance.now();
+            console.log(`AI Forced Line: mate-in-2 found in ${(end - start).toFixed(2)}ms | Move:`, forcedWin2);
+            return forcedWin2;
+        }
+    }
+
+    // D) Full Minimax search
     const result = minimax(
         gameState, 
         MAX_DEPTH, 
@@ -558,8 +786,9 @@ export const getBestMove = (gameState, aiPlayerKey) => {
 const minimax = (state, depth, alpha, beta, isMaximizing, aiPlayerKey, isRecruitment) => {
     // Base Case: Depth limit reached or Game Over
     const outcome = checkGameOver(state);
+    const plyFromRoot = MAX_DEPTH - depth; // Track how far we are from root for eval gating
     if (depth === 0 || outcome) {
-        return { score: evaluateState(state, aiPlayerKey, outcome) };
+        return { score: evaluateState(state, aiPlayerKey, outcome, plyFromRoot) };
     }
 
     const currentPlayer = isMaximizing ? aiPlayerKey : (aiPlayerKey === 'p1' ? 'p2' : 'p1');
@@ -568,7 +797,7 @@ const minimax = (state, depth, alpha, beta, isMaximizing, aiPlayerKey, isRecruit
     const orderedMoves = orderMovesByHeuristic(state, possibleMoves, currentPlayer);
 
     if (orderedMoves.length === 0) {
-        return { score: evaluateState(state, aiPlayerKey, null) };
+        return { score: evaluateState(state, aiPlayerKey, null, plyFromRoot) };
     }
 
     let bestMove = null;
@@ -607,13 +836,14 @@ const minimax = (state, depth, alpha, beta, isMaximizing, aiPlayerKey, isRecruit
 /**
  * Evaluation Function (The "Brain")
  */
-const evaluateState = (state, aiPlayerKey, outcome) => {
+const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
     if (outcome) {
         if (outcome.winner === playerKeyToLabel(aiPlayerKey)) return INFINITY; // AI Wins
         return -INFINITY; // AI Loses
     }
 
     const enemyKey = aiPlayerKey === 'p1' ? 'p2' : 'p1';
+    const useHeavyEval = plyFromRoot <= 2; // Heavy heuristics only near the root to save time
     let score = 0;
 
     // 1. Material Score (Units on Board)
@@ -643,17 +873,44 @@ const evaluateState = (state, aiPlayerKey, outcome) => {
     if (aiSafety.captured || aiSafety.surrounded) score -= 10000; // Danger! (Increased from 5000)
     if (enemySafety.captured || enemySafety.surrounded) score += 10000; // Winning chance!
 
+    // --- Early exit for light eval to keep depth fast ---
+    if (!useHeavyEval) {
+        const aiLeaderId = state.leadersPositions[aiPlayerKey];
+        const aiLeaderNode = NODE_MAP.get(aiLeaderId);
+        const enemyLeaderId = state.leadersPositions[enemyKey];
+        const enemyLeaderNode = NODE_MAP.get(enemyLeaderId);
+
+        // Penalize nearby high-threat enemies (cheap distance-only)
+        state.placements.forEach(p => {
+            if (p.playerKey !== enemyKey) return;
+            const unitNode = NODE_MAP.get(p.nodeId);
+            if (!unitNode || !aiLeaderNode) return;
+            const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
+            if (HIGH_THREAT_ABILITIES.includes(p.cardKey)) {
+                score -= Math.max(0, 5 - dist) * 120;
+            } else {
+                score -= Math.max(0, 4 - dist) * 40;
+            }
+        });
+
+        // Reward own units pressuring enemy leader (cheap distance-only)
+        state.placements.forEach(p => {
+            if (p.playerKey !== aiPlayerKey) return;
+            const unitNode = NODE_MAP.get(p.nodeId);
+            if (!unitNode || !enemyLeaderNode) return;
+            const dist = Math.abs(unitNode.col - enemyLeaderNode.col) + Math.abs(unitNode.row - enemyLeaderNode.row);
+            score += Math.max(0, 5 - dist) * 50;
+        });
+
+        return score;
+    }
+
     // --- NEW: Threat Awareness & Ability Awareness ---
     
     // A. Analyze Enemy Threats on Board (COMPREHENSIVE)
     const aiLeaderNodeId = state.leadersPositions[aiPlayerKey];
     const aiLeaderNode = NODES.find(n => n.id === aiLeaderNodeId);
     const aiLeaderAdjacentsForThreats = getAdjacentNodeIds(NODES, aiLeaderNodeId);
-    
-    // Get AI units protecting the leader (for cogneur threat analysis)
-    const aiUnitsNearLeader = state.placements.filter(p => 
-        p.playerKey === aiPlayerKey && aiLeaderAdjacentsForThreats.includes(p.nodeId)
-    );
     
     state.placements.forEach(p => {
         if (p.playerKey === enemyKey) {
@@ -783,7 +1040,6 @@ const evaluateState = (state, aiPlayerKey, outcome) => {
             // 9. GARDE ROYAL (Royal Guard) - Special movement near enemy leader
             else if (p.cardKey === 'garderoyal') {
                 // Royal Guard moves relative to ENEMY leader, which is AI's leader!
-                const royalMoves = getRoyalGuardMoves(enemyKey, state.placements, state.leadersPositions);
                 // Note: getRoyalGuardMoves uses the player's OWN leader, so this might need adjustment
                 // But if enemy Royal Guard exists, it's still a mobile threat
                 if (unitNode && aiLeaderNode) {
@@ -908,14 +1164,11 @@ const evaluateState = (state, aiPlayerKey, outcome) => {
     
     // Check quality of escape routes (are they safe or threatened?)
     let safeEscapes = 0;
-    let threatenedEscapes = 0;
     aiLeaderAdjacents.forEach(adjId => {
         if (isNodeEmpty(adjId, state.placements, state.leadersPositions)) {
             const threats = countThreatsToNode(adjId, enemyKey, state.placements, state.leadersPositions, 1);
             if (threats.count === 0) {
                 safeEscapes++;
-            } else {
-                threatenedEscapes++;
             }
         }
     });
@@ -1398,6 +1651,25 @@ const applyMove = (state, move) => {
         }
     } else if (move.type === 'USE_ABILITY') {
         const unitIndex = newState.placements.findIndex(p => p.nodeId === move.unitId);
+        const getLeaderAtNode = (nodeId) => {
+            if (newState.leadersPositions.p1 === nodeId) return 'p1';
+            if (newState.leadersPositions.p2 === nodeId) return 'p2';
+            return null;
+        };
+
+        const moveTargetOccupant = (targetNodeId, toNodeId) => {
+            const targetIndex = newState.placements.findIndex(p => p.nodeId === targetNodeId);
+            if (targetIndex !== -1) {
+                newState.placements[targetIndex] = { ...newState.placements[targetIndex], nodeId: toNodeId };
+                return true;
+            }
+            const leaderKey = getLeaderAtNode(targetNodeId);
+            if (leaderKey) {
+                newState.leadersPositions[leaderKey] = toNodeId;
+                return true;
+            }
+            return false;
+        };
         
         if (move.ability === 'acrobate' || move.ability === 'cavalier' || move.ability === 'garderoyal' || move.ability === 'rodeuse') {
             // Simple move abilities
@@ -1407,10 +1679,7 @@ const applyMove = (state, move) => {
         }
         else if (move.ability === 'manipulatrice' || move.ability === 'tavernier' || move.ability === 'cogneur') {
             // Move target abilities
-            const targetIndex = newState.placements.findIndex(p => p.nodeId === move.targetId);
-            if (targetIndex !== -1) {
-                newState.placements[targetIndex] = { ...newState.placements[targetIndex], nodeId: move.to };
-            }
+            moveTargetOccupant(move.targetId, move.to);
         }
         else if (move.ability === 'lancegrappin') {
             if (move.subType === 'move_self') {
@@ -1418,21 +1687,24 @@ const applyMove = (state, move) => {
                     newState.placements[unitIndex] = { ...newState.placements[unitIndex], nodeId: move.to };
                 }
             } else if (move.subType === 'drag_target') {
-                const targetIndex = newState.placements.findIndex(p => p.nodeId === move.targetId);
-                if (targetIndex !== -1) {
-                    newState.placements[targetIndex] = { ...newState.placements[targetIndex], nodeId: move.to };
-                }
+                moveTargetOccupant(move.targetId, move.to);
             }
         }
         else if (move.ability === 'illusionniste') {
             // Swap positions
             const targetIndex = newState.placements.findIndex(p => p.nodeId === move.targetId);
+            const leaderKey = getLeaderAtNode(move.targetId);
             if (unitIndex !== -1 && targetIndex !== -1) {
                 const unitPos = newState.placements[unitIndex].nodeId;
                 const targetPos = newState.placements[targetIndex].nodeId;
-                
+
                 newState.placements[unitIndex] = { ...newState.placements[unitIndex], nodeId: targetPos };
                 newState.placements[targetIndex] = { ...newState.placements[targetIndex], nodeId: unitPos };
+            } else if (unitIndex !== -1 && leaderKey) {
+                const unitPos = newState.placements[unitIndex].nodeId;
+                const leaderPos = newState.leadersPositions[leaderKey];
+                newState.placements[unitIndex] = { ...newState.placements[unitIndex], nodeId: leaderPos };
+                newState.leadersPositions[leaderKey] = unitPos;
             }
         }
     }
@@ -1451,3 +1723,6 @@ const checkGameOver = (state) => {
 
     return null;
 };
+
+// Lightweight export so other modules (e.g., Nemesis auto-move) can score a state without running full search.
+export const scoreState = (state, aiPlayerKey) => evaluateState(state, aiPlayerKey, null, 0);
