@@ -13,13 +13,13 @@ import { evaluateLeaderState, getAdjacentNodeIds, isNodeEmpty } from './GameUtil
 
 export const CHARACTER_WEIGHTS = {
     // --- TIER S (Win Conditions) ---
-    'assassin': 100, // Solo capture threat. Highest priority.
+    'garderoyal': 100, // Solo capture threat. Highest priority.
     'archere': 95,   // Ranged zoning. Creates "death zones".
-    'nemesis': 90,   // Uncontrollable movement. Can be baited easily.
+    'ourson': 90,   // Uncontrollable movement. Can be baited easily.
 
     // --- TIER A (High Control/Defense) ---
     'geolier': 88,    // Disables enemy abilities. Strong control.
-    'garderoyal': 85, // High mobility + Leader protection.
+    'assassin': 85, // High mobility + Leader protection.
     'lancegrappin': 82, // Displacement (Pull/Move). Very disruptive.
 
     // --- TIER B (Value & Mobility) ---
@@ -31,7 +31,7 @@ export const CHARACTER_WEIGHTS = {
     // Note: The *Recruitment Value* is higher because you get both.
     'vieilours': 55,    // The Hermit. Standard movement/capture.
     'hermitandcub': 55, // Alias
-    'ourson': 25,       // The Cub. Cannot capture, but excellent for blocking/surrounding.
+    'nemesis': 25,       // The Cub. Cannot capture, but excellent for blocking/surrounding.
 
     // --- TIER C (Situational) ---
     'vizir': 60,    // Leader mobility buff. Good for survival.

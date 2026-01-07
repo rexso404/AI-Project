@@ -26,8 +26,26 @@ const PASSIVE_THREAT_ABILITIES = ['geolier', 'archere', 'nemesis'];
 
 const NODES = getBoardNodes();
 const NODE_MAP = new Map(NODES.map(n => [n.id, n]));
-const MAX_DEPTH = 4; // Optimal depth for web
+const MAX_DEPTH = 6; // Optimal depth for web
 const INFINITY = 1000000;
+
+const BOARD_BOUNDS = (() => {
+    let minRow = Infinity;
+    let maxRow = -Infinity;
+    let minCol = Infinity;
+    let maxCol = -Infinity;
+    for (const n of NODES) {
+        if (typeof n?.row === 'number') {
+            minRow = Math.min(minRow, n.row);
+            maxRow = Math.max(maxRow, n.row);
+        }
+        if (typeof n?.col === 'number') {
+            minCol = Math.min(minCol, n.col);
+            maxCol = Math.max(maxCol, n.col);
+        }
+    }
+    return { minRow, maxRow, minCol, maxCol };
+})();
 
 // Heuristik ringan untuk mengurutkan langkah (membantu pruning dan hindari pembukaan kaku)
 const manhattanDist = (idA, idB) => {
@@ -37,40 +55,422 @@ const manhattanDist = (idA, idB) => {
     return Math.abs(a.col - b.col) + Math.abs(a.row - b.row);
 };
 
+const isLeaderOnEdge = (leaderNodeId) => {
+    const node = NODE_MAP.get(leaderNodeId);
+    if (!node) return false;
+    return (
+        node.col === BOARD_BOUNDS.minCol ||
+        node.col === BOARD_BOUNDS.maxCol ||
+        node.row === BOARD_BOUNDS.minRow ||
+        node.row === BOARD_BOUNDS.maxRow
+    );
+};
+
+const getLeaderAdjacencyStats = (state, playerKey) => {
+    const leaderId = state?.leadersPositions?.[playerKey];
+    if (leaderId == null) return { leaderId: null, adjacentUnitCount: 0, emptyAdjacentCount: 0, adjacentIds: [] };
+    const adjacentIds = getAdjacentNodeIds(NODES, leaderId);
+    const adjacentUnitCount = (state?.placements ?? []).filter((p) =>
+        p && p.playerKey === playerKey && adjacentIds.includes(p.nodeId)
+    ).length;
+    const emptyAdjacentCount = adjacentIds.filter((id) => isNodeEmpty(id, state.placements, state.leadersPositions)).length;
+    return { leaderId, adjacentUnitCount, emptyAdjacentCount, adjacentIds };
+};
+
+const countAdjacentEnemyCharacters = (nodeId, playerKey, placements, leadersPositions) => {
+    if (nodeId == null) return 0;
+    const enemyKey = playerKey === 'p1' ? 'p2' : 'p1';
+    const adj = getAdjacentNodeIds(NODES, nodeId);
+    let count = 0;
+    for (const id of adj) {
+        const occ = getNodeOccupant(id, leadersPositions, placements);
+        if (!occ) continue;
+        if (occ.playerKey !== enemyKey) continue;
+        // Hermit+Cub: cub cannot help capture, but still blocks space.
+        // For "don't walk between enemies" blunder avoidance, cub still counts as an enemy body.
+        count += 1;
+    }
+    return count;
+};
+
+const hasEnemyWithinDistanceOfLeader = (state, playerKey, maxDist = 2) => {
+    const ownLeaderId = state?.leadersPositions?.[playerKey];
+    if (ownLeaderId == null) return false;
+    const enemyKey = playerKey === 'p1' ? 'p2' : 'p1';
+    const enemyLeaderId = state?.leadersPositions?.[enemyKey];
+    if (enemyLeaderId != null && manhattanDist(enemyLeaderId, ownLeaderId) <= maxDist) return true;
+
+    const enemyPlacements = (state?.placements ?? []).filter((p) => p && p.playerKey === enemyKey);
+    for (const p of enemyPlacements) {
+        if (p?.nodeId == null) continue;
+        if (manhattanDist(p.nodeId, ownLeaderId) <= maxDist) return true;
+    }
+    return false;
+};
+
+// Detect when the enemy is "full defense" (turtling) based on user-described patterns.
+// 1) Enemy leader is ringed by ~5 units (Hermit+Cub counts as 2 units on board).
+// 2) Enemy leader sits on an edge and blocks the few approach squares (>=2 adjacent units with <=1 empty adjacent).
+const getEnemyFullDefenseInfo = (state, enemyKey) => {
+    const stats = getLeaderAdjacencyStats(state, enemyKey);
+    const condRing5 = stats.adjacentUnitCount >= 5;
+    const condEdgeTurtle =
+        stats.leaderId != null &&
+        isLeaderOnEdge(stats.leaderId) &&
+        stats.adjacentUnitCount >= 2 &&
+        stats.emptyAdjacentCount <= 1;
+
+    const isFullDefense = condRing5 || condEdgeTurtle;
+    const reason = condRing5 ? 'ring-5' : (condEdgeTurtle ? 'edge-2-block' : '');
+    return { isFullDefense, reason, stats };
+};
+
+const getOurDefenseInfo = (state, aiPlayerKey) => {
+    const stats = getLeaderAdjacencyStats(state, aiPlayerKey);
+    const isFullDefense = stats.adjacentUnitCount >= 3 && stats.emptyAdjacentCount >= 2;
+    return { isFullDefense, stats };
+};
+
+// Pathfinding (BFS) through empty nodes only.
+// Used for planning "unblocked routes" (not occupied by either team or leaders).
+const findShortestPathThroughEmpty = (state, startNodeId, goalNodeId) => {
+    if (startNodeId == null || goalNodeId == null) return null;
+    if (startNodeId === goalNodeId) return [startNodeId];
+
+    const visited = new Set([startNodeId]);
+    const prev = new Map();
+    const queue = [startNodeId];
+
+    while (queue.length > 0) {
+        const cur = queue.shift();
+        const neighbors = getAdjacentNodeIds(NODES, cur);
+        for (const next of neighbors) {
+            if (visited.has(next)) continue;
+
+            // Only traverse empty squares; allow reaching the goal explicitly.
+            const traversable = (next === goalNodeId) || isNodeEmpty(next, state.placements, state.leadersPositions);
+            if (!traversable) continue;
+
+            visited.add(next);
+            prev.set(next, cur);
+            if (next === goalNodeId) {
+                // Reconstruct path.
+                const path = [goalNodeId];
+                let p = cur;
+                while (p != null && p !== startNodeId) {
+                    path.push(p);
+                    p = prev.get(p);
+                }
+                path.push(startNodeId);
+                path.reverse();
+                return path;
+            }
+            queue.push(next);
+        }
+    }
+    return null;
+};
+
+// Choose the best "first step" for Assassin to approach the enemy leader via an unblocked route.
+// Goal squares are empty nodes adjacent to the enemy leader.
+const getAssassinBestFirstStep = (state, aiPlayerKey, enemyKey, assassinNodeId) => {
+    const enemyLeaderId = state?.leadersPositions?.[enemyKey];
+    if (enemyLeaderId == null || assassinNodeId == null) return null;
+
+    // If enemy leader is fully surrounded, there may be no empty adjacent squares.
+    // In that case, stage the assassin on the closest reachable empty squares within distance 2-3.
+    const goalCandidates = NODES
+        .map((n) => n.id)
+        .filter((id) => isNodeEmpty(id, state.placements, state.leadersPositions))
+        .filter((id) => {
+            const d = manhattanDist(id, enemyLeaderId);
+            return d >= 1 && d <= 3;
+        })
+        .sort((a, b) => manhattanDist(a, enemyLeaderId) - manhattanDist(b, enemyLeaderId));
+    if (goalCandidates.length === 0) return null;
+
+    let best = null;
+    for (const goal of goalCandidates) {
+        const path = findShortestPathThroughEmpty(state, assassinNodeId, goal);
+        if (!path || path.length < 2) continue;
+        const firstStep = path[1];
+        const pathLen = path.length - 1;
+        if (!best || pathLen < best.pathLen) {
+            best = { goal, firstStep, pathLen, path };
+        }
+    }
+    return best;
+};
+
 const scoreMoveHeuristic = (state, move, currentPlayer) => {
     const enemyKey = currentPlayer === 'p1' ? 'p2' : 'p1';
     const enemyLeaderId = state.leadersPositions[enemyKey];
     const ownLeaderId = state.leadersPositions[currentPlayer];
 
+    const enemyDefense = getEnemyFullDefenseInfo(state, enemyKey);
+    const ourDefense = getOurDefenseInfo(state, currentPlayer);
+    const enemyNearOwnLeader = hasEnemyWithinDistanceOfLeader(state, currentPlayer, 2);
+
     let score = 0;
 
     // Urutan jenis aksi
+    // Catatan: ini hanya untuk ordering (alpha-beta), bukan keputusan final.
+    // Kita bias ke defensive-first agar AI tidak dominan menyerang.
     if (move.type === 'USE_ABILITY') score += 3;
     else if (move.type === 'MOVE_UNIT') score += 2;
     else if (move.type === 'MOVE_LEADER') score += 1;
 
-    // Lebih dekat ke leader musuh diprioritaskan
-    if (move.to != null && move.unitId != null) {
-        const before = manhattanDist(move.unitId, enemyLeaderId);
-        const after = manhattanDist(move.to, enemyLeaderId);
-        score += (before - after) * 4;
+    const actorKey = move.cardKey ?? move.ability ?? null;
+
+    // If we are already in full defense and the enemy is threatening (within 2 tiles of our leader),
+    // keep the bodyguards in place. This stabilizes pruning/ordering and avoids "opening" the leader.
+    if (ourDefense.isFullDefense && enemyNearOwnLeader) {
+        const isSelfMove = (move.to != null && move.unitId != null);
+        if (isSelfMove) {
+            const before = manhattanDist(move.unitId, ownLeaderId);
+            const after = manhattanDist(move.to, ownLeaderId);
+            const k = move.cardKey;
+            const isDefender = Boolean(k && (DEFENSIVE_UNITS.includes(k) || k === 'ourson'));
+
+            // Don't peel off adjacent defenders when under direct pressure.
+            if (isDefender && before <= 1 && after > 1) score -= 80;
+
+            // Protector is specifically intended to lock down around the leader; keep it close.
+            if (k === 'protecteur' && before <= 2 && after > 2) score -= 140;
+        }
     }
 
-    // Leader sendiri: sedikit hindari maju tanpa alasan
+    // Prefergerakan unit defensif agar dekat leader sendiri (proteksi + escort)
+    if (actorKey && (DEFENSIVE_UNITS.includes(actorKey) || actorKey === 'ourson')) {
+        if (move.to != null && move.unitId != null) {
+            const before = manhattanDist(move.unitId, ownLeaderId);
+            const after = manhattanDist(move.to, ownLeaderId);
+            score += (before - after) * 6;
+        }
+    }
+
+    // Hindari leader maju sendirian: kalau leader bergerak mendekat musuh, wajib ada escort defensif.
     if (move.type === 'MOVE_LEADER' && move.to != null) {
-        const before = manhattanDist(ownLeaderId, enemyLeaderId);
-        const after = manhattanDist(move.to, enemyLeaderId);
-        score += (after - before);
+        const beforeToEnemy = manhattanDist(ownLeaderId, enemyLeaderId);
+        const afterToEnemy = manhattanDist(move.to, enemyLeaderId);
+
+        // Hitung "escort" defensif yang sudah dekat ke posisi leader tujuan.
+        const defendersNearDest = (state.placements ?? []).filter((p) => {
+            if (!p || p.playerKey !== currentPlayer) return false;
+            const k = p.cardKey;
+            if (!(DEFENSIVE_UNITS.includes(k) || k === 'ourson')) return false;
+            return manhattanDist(p.nodeId, move.to) <= 2;
+        }).length;
+
+        const isAdvancing = afterToEnemy < beforeToEnemy;
+        if (isAdvancing) {
+            const requiredEscorts = enemyDefense.isFullDefense ? 2 : 1;
+            if (defendersNearDest >= requiredEscorts) score += 4;
+            else score -= enemyDefense.isFullDefense ? 18 : 12;
+        } else {
+            // Retreat/side-step slightly preferred when unsure.
+            score += 1;
+        }
     }
 
-    // Jitter kecil agar tidak deterministik
-    score += Math.random() * 0.01;
+    // Jika musuh full defense: jangan kirim banyak penyerang.
+    // - Assassin boleh maju sendirian.
+    // - Archer boleh ikut menyerang, tapi selain itu bias kembali menjaga leader.
+    if (enemyDefense.isFullDefense) {
+        if (move.type === 'MOVE_UNIT' && move.to != null && move.unitId != null) {
+            const k = move.cardKey;
+            const before = manhattanDist(move.unitId, ownLeaderId);
+            const after = manhattanDist(move.to, ownLeaderId);
+
+            // Bonus kuat kalau assassin mendekat ke leader musuh.
+            if (k === 'assassin') {
+                const d0 = manhattanDist(move.unitId, enemyLeaderId);
+                const d1 = manhattanDist(move.to, enemyLeaderId);
+                score += (d0 - d1) * 18;
+            }
+
+            // Penalize moving non-defensive units too far away from own leader (turtle response).
+            const isDefensive = (DEFENSIVE_UNITS.includes(k) || k === 'ourson');
+            const allowedAttacker = (k === 'assassin' || k === 'archere');
+            if (!isDefensive && !allowedAttacker) {
+                if (after > 3 && after > before) score -= 10;
+                if (after > 4 && after > before) score -= 12;
+            }
+        }
+    }
 
     return score;
 };
 
+const moveTiebreakKey = (move) => {
+    // Deterministic ordering: helps alpha-beta pruning and makes AI behavior reproducible.
+    return [
+        move?.type ?? '',
+        move?.ability ?? '',
+        move?.subType ?? '',
+        move?.unitId ?? '',
+        move?.from ?? '',
+        move?.targetId ?? '',
+        move?.to ?? '',
+        move?.deckIndex ?? '',
+        move?.tokenId ?? '',
+        move?.index ?? '',
+    ].join('|');
+};
+
 const orderMovesByHeuristic = (state, moves, currentPlayer) => {
-    return [...moves].sort((a, b) => scoreMoveHeuristic(state, b, currentPlayer) - scoreMoveHeuristic(state, a, currentPlayer));
+    return [...moves].sort((a, b) => {
+        const diff = scoreMoveHeuristic(state, b, currentPlayer) - scoreMoveHeuristic(state, a, currentPlayer);
+        if (diff !== 0) return diff;
+        return moveTiebreakKey(a).localeCompare(moveTiebreakKey(b));
+    });
+};
+
+// =========================================================================
+// TURN-AWARE SEARCH + TRANSPOSITION TABLE
+// =========================================================================
+
+const buildEmptyMovementTracker = () => ({
+    p1: { leader: false, units: [] },
+    p2: { leader: false, units: [] },
+});
+
+const cloneMovementTracker = (tracker) => ({
+    p1: { leader: Boolean(tracker?.p1?.leader), units: [...(tracker?.p1?.units ?? [])] },
+    p2: { leader: Boolean(tracker?.p2?.leader), units: [...(tracker?.p2?.units ?? [])] },
+});
+
+const normalizeMovementTracker = (tracker) => {
+    const safe = tracker ?? buildEmptyMovementTracker();
+    return {
+        p1: {
+            leader: Boolean(safe?.p1?.leader),
+            units: [...(safe?.p1?.units ?? [])].slice().sort(),
+        },
+        p2: {
+            leader: Boolean(safe?.p2?.leader),
+            units: [...(safe?.p2?.units ?? [])].slice().sort(),
+        },
+    };
+};
+
+const stateKeyForTT = (state, playerToMove) => {
+    // Note: This TT is used within a single getBestMove call.
+    // Deck composition doesn't change in action phase, so we omit full decks for speed.
+    const leaders = state?.leadersPositions ?? {};
+    const placements = Array.isArray(state?.placements) ? state.placements : [];
+    const tracker = normalizeMovementTracker(state?.movementTracker);
+
+    const leaderKey = `L:${leaders.p1 ?? 'x'}:${leaders.p2 ?? 'x'}`;
+    const trackerKey = `T:${tracker.p1.leader ? 1 : 0}:${tracker.p1.units.join(',')}|${tracker.p2.leader ? 1 : 0}:${tracker.p2.units.join(',')}`;
+
+    const piecesKey = placements
+        .map((p) => {
+            const tokenKey = p?.tokenId != null ? `:${p.tokenId}` : '';
+            return `${p?.playerKey ?? '?'}:${p?.cardKey ?? '?'}:${p?.deckIndex ?? '?'}${tokenKey}@${p?.nodeId ?? '?'}`;
+        })
+        .sort()
+        .join(';');
+
+    return `${playerToMove}|${leaderKey}|${trackerKey}|P:${piecesKey}`;
+};
+
+// Turn-aware minimax: a player may take multiple actions in a single turn until movementTracker blocks them.
+// When no actions remain for that player, the turn passes and movementTracker resets.
+const minimaxTurnAware = (state, depth, alpha, beta, aiPlayerKey, playerToMove, tt) => {
+    const outcome = checkGameOver(state);
+    const plyFromRoot = MAX_DEPTH - depth;
+    if (depth === 0 || outcome) {
+        return { score: evaluateState(state, aiPlayerKey, outcome, plyFromRoot) };
+    }
+
+    const table = tt ?? new Map();
+    const key = stateKeyForTT(state, playerToMove);
+    const cached = table.get(key);
+    if (cached && cached.depth >= depth) {
+        return { score: cached.score, move: cached.move ?? null };
+    }
+
+    const moves = getAllPossibleMoves(state, playerToMove, false);
+    const orderedMoves = orderMovesByHeuristic(state, moves, playerToMove);
+
+    if (orderedMoves.length === 0) {
+        // Pass the turn.
+        const nextPlayer = otherPlayerKey(playerToMove);
+        const passedState = {
+            ...state,
+            currentTurn: playerKeyToLabel(nextPlayer),
+            movementTracker: buildEmptyMovementTracker(),
+        };
+
+        // If opponent also has no moves, evaluate.
+        const opponentMoves = getAllPossibleMoves(passedState, nextPlayer, false);
+        if (opponentMoves.length === 0) {
+            const leafScore = evaluateState(passedState, aiPlayerKey, null, plyFromRoot);
+            table.set(key, { depth, score: leafScore, move: null });
+            return { score: leafScore };
+        }
+
+        const res = minimaxTurnAware(passedState, depth, alpha, beta, aiPlayerKey, nextPlayer, table);
+        table.set(key, { depth, score: res.score, move: null });
+        return res;
+    }
+
+    const isMaximizing = playerToMove === aiPlayerKey;
+    let bestMove = null;
+
+    if (isMaximizing) {
+        let bestScore = -INFINITY;
+        for (const move of orderedMoves) {
+            let nextState = applyMove(state, move);
+
+            // Same player continues if they still have actions in this turn.
+            const stillHasMoves = getAllPossibleMoves(nextState, playerToMove, false).length > 0;
+            const nextPlayer = stillHasMoves ? playerToMove : otherPlayerKey(playerToMove);
+            if (!stillHasMoves) {
+                nextState = {
+                    ...nextState,
+                    currentTurn: playerKeyToLabel(nextPlayer),
+                    movementTracker: buildEmptyMovementTracker(),
+                };
+            }
+
+            const evalResult = minimaxTurnAware(nextState, depth - 1, alpha, beta, aiPlayerKey, nextPlayer, table);
+            if (evalResult.score > bestScore) {
+                bestScore = evalResult.score;
+                bestMove = move;
+            }
+            alpha = Math.max(alpha, bestScore);
+            if (beta <= alpha) break;
+        }
+        table.set(key, { depth, score: bestScore, move: bestMove });
+        return { score: bestScore, move: bestMove };
+    }
+
+    let bestScore = INFINITY;
+    for (const move of orderedMoves) {
+        let nextState = applyMove(state, move);
+
+        const stillHasMoves = getAllPossibleMoves(nextState, playerToMove, false).length > 0;
+        const nextPlayer = stillHasMoves ? playerToMove : otherPlayerKey(playerToMove);
+        if (!stillHasMoves) {
+            nextState = {
+                ...nextState,
+                currentTurn: playerKeyToLabel(nextPlayer),
+                movementTracker: buildEmptyMovementTracker(),
+            };
+        }
+
+        const evalResult = minimaxTurnAware(nextState, depth - 1, alpha, beta, aiPlayerKey, nextPlayer, table);
+        if (evalResult.score < bestScore) {
+            bestScore = evalResult.score;
+            bestMove = move;
+        }
+        beta = Math.min(beta, bestScore);
+        if (beta <= alpha) break;
+    }
+    table.set(key, { depth, score: bestScore, move: bestMove });
+    return { score: bestScore, move: bestMove };
 };
 
 // =========================================================================
@@ -174,10 +574,12 @@ const findBestDefenseAgainstMateIn1 = (state, aiPlayerKey) => {
     let bestScore = -INFINITY;
     let alpha = -INFINITY;
     let beta = INFINITY;
+    const tt = new Map();
 
     for (const move of safeMoves) {
         const nextState = applyMove(state, move);
-        const evalResult = minimax(nextState, MAX_DEPTH - 1, alpha, beta, false, aiPlayerKey, false);
+        // After AI defends, it may still have remaining actions in this turn.
+        const evalResult = minimaxTurnAware(nextState, MAX_DEPTH - 1, alpha, beta, aiPlayerKey, aiPlayerKey, tt);
         if (evalResult.score > bestScore) {
             bestScore = evalResult.score;
             bestMove = move;
@@ -763,74 +1165,169 @@ export const getBestMove = (gameState, aiPlayerKey) => {
         }
     }
 
-    // D) Full Minimax search
-    const result = minimax(
-        gameState, 
-        MAX_DEPTH, 
-        -INFINITY, 
-        INFINITY, 
-        true, 
-        aiPlayerKey, 
-        false
+    // E) Enemy full defense (turtle) response:
+    // - If we have Assassin, send it in solo.
+    // - If we have Archer, prefer keeping only Archer + 1 non-defensive attacker committed.
+    // The deeper minimax evaluation also enforces this, but this fast check helps pick the right "first step".
+    const enemyKey = otherPlayerKey(aiPlayerKey);
+    const enemyDefense = getEnemyFullDefenseInfo(gameState, enemyKey);
+    if (enemyDefense.isFullDefense && !isTimeUp(forcedStart, FORCED_SCAN_TOTAL_BUDGET_MS)) {
+        const enemyLeaderId = gameState.leadersPositions[enemyKey];
+        const ownLeaderId = gameState.leadersPositions[aiPlayerKey];
+
+        const assassinUnits = (gameState.placements ?? []).filter((p) => p?.playerKey === aiPlayerKey && p?.cardKey === 'assassin');
+        if (assassinUnits.length > 0) {
+            const allMoves = orderMovesForForcedScan(gameState, getAllPossibleMoves(gameState, aiPlayerKey, false), aiPlayerKey);
+            const assassinMoves = allMoves.filter((m) => m?.type === 'MOVE_UNIT' && m?.cardKey === 'assassin' && m?.to != null);
+
+            let best = null;
+            let bestScore = -Infinity;
+            let checked = 0;
+
+            // Precompute best first-step per assassin position.
+            const assassinStepPlan = new Map();
+            for (const u of assassinUnits) {
+                assassinStepPlan.set(u.nodeId, getAssassinBestFirstStep(gameState, aiPlayerKey, enemyKey, u.nodeId));
+            }
+
+            for (const move of assassinMoves) {
+                if (checked >= 10 || isTimeUp(forcedStart, FORCED_SCAN_TOTAL_BUDGET_MS)) break;
+
+                const plan = assassinStepPlan.get(move.unitId) ?? null;
+                // If we found an unblocked route, strongly prefer following its first step.
+                // If there's no route, we still allow fallback to distance-improving moves.
+                if (plan && move.to !== plan.firstStep) {
+                    checked++;
+                    continue;
+                }
+
+                const d0 = manhattanDist(move.unitId, enemyLeaderId);
+                const d1 = manhattanDist(move.to, enemyLeaderId);
+                // Must actually move closer (solo attack intention).
+                if (d1 >= d0) {
+                    checked++;
+                    continue;
+                }
+
+                const nextState = applyMove(gameState, move);
+                const aiSafetyAfter = evaluateLeaderState(aiPlayerKey, nextState.placements, nextState.leadersPositions);
+                if (aiSafetyAfter.captured || aiSafetyAfter.surrounded) {
+                    checked++;
+                    continue;
+                }
+
+                // Do not allow an immediate enemy win as a result of this poke.
+                if (hasImmediateWin(nextState, enemyKey, forcedStart, FORCED_SCAN_PER_CALL_BUDGET_MS)) {
+                    checked++;
+                    continue;
+                }
+
+                // Prefer assassin closer to enemy leader, but keep a soft preference to not overextend our leader.
+                const leaderGap = manhattanDist(ownLeaderId, enemyLeaderId);
+                const evalScore = evaluateState(nextState, aiPlayerKey, null, 0);
+                const pathBonus = plan ? Math.max(0, 7 - plan.pathLen) * 220 : 0;
+                const quickScore = evalScore + ((d0 - d1) * 400) + pathBonus + (leaderGap <= 4 ? -80 : 0);
+
+                if (quickScore > bestScore) {
+                    bestScore = quickScore;
+                    best = move;
+                }
+                checked++;
+            }
+
+            if (best) {
+                const end = performance.now();
+                console.log(`AI Turtle Response: enemy=${enemyDefense.reason} | assassin solo in ${(end - start).toFixed(2)}ms | Move:`, best);
+                return best;
+            }
+        }
+    }
+
+    // F) Mirror full defense: if enemy is turtling, keep OUR leader maximally safe.
+    // This prevents the "full def only a few rounds" problem by selecting a defense-improving move
+    // before running the full minimax.
+    if (enemyDefense.isFullDefense && !isTimeUp(forcedStart, FORCED_SCAN_TOTAL_BUDGET_MS)) {
+        const ourDefense = getOurDefenseInfo(gameState, aiPlayerKey);
+        const aiSafetyNow = evaluateLeaderState(aiPlayerKey, gameState.placements, gameState.leadersPositions);
+        const needMaintainDefense = !ourDefense.isFullDefense || aiSafetyNow.surrounded || aiSafetyNow.captured;
+
+        if (needMaintainDefense) {
+            const moves = orderMovesForForcedScan(gameState, getAllPossibleMoves(gameState, aiPlayerKey, false), aiPlayerKey);
+            let bestMove = null;
+            let bestValue = -Infinity;
+            let checked = 0;
+
+            for (const move of moves) {
+                if (checked >= 18 || isTimeUp(forcedStart, FORCED_SCAN_TOTAL_BUDGET_MS)) break;
+
+                // Prefer defensive-unit moves and safe leader moves; avoid throwing attackers away.
+                if (move?.type === 'MOVE_UNIT') {
+                    const k = move.cardKey;
+                    const isDef = DEFENSIVE_UNITS.includes(k) || k === 'ourson';
+                    const allowedPoke = k === 'assassin' || k === 'archere';
+                    if (!isDef && !allowedPoke) {
+                        // Skip most non-defensive moves in this maintenance phase.
+                        checked++;
+                        continue;
+                    }
+                }
+
+                const nextState = applyMove(gameState, move);
+                const aiSafetyAfter = evaluateLeaderState(aiPlayerKey, nextState.placements, nextState.leadersPositions);
+                if (aiSafetyAfter.captured) {
+                    checked++;
+                    continue;
+                }
+
+                // Hard requirement: do not allow immediate enemy win.
+                if (hasImmediateWin(nextState, enemyKey, forcedStart, FORCED_SCAN_PER_CALL_BUDGET_MS)) {
+                    checked++;
+                    continue;
+                }
+
+                const stats = getLeaderAdjacencyStats(nextState, aiPlayerKey);
+                const defendersAdj = (nextState.placements ?? []).filter((p) =>
+                    p && p.playerKey === aiPlayerKey && (DEFENSIVE_UNITS.includes(p.cardKey) || p.cardKey === 'ourson') &&
+                    stats.adjacentIds.includes(p.nodeId)
+                ).length;
+
+                // Primary: more adjacent defenders + more empty adjacent squares (escape routes).
+                // Secondary: overall evaluation.
+                const value = (defendersAdj * 500) + (stats.emptyAdjacentCount * 180) + evaluateState(nextState, aiPlayerKey, null, 0);
+
+                if (value > bestValue) {
+                    bestValue = value;
+                    bestMove = move;
+                }
+
+                checked++;
+            }
+
+            if (bestMove) {
+                const end = performance.now();
+                console.log(`AI Turtle Response: mirror full defense in ${(end - start).toFixed(2)}ms | Move:`, bestMove);
+                return bestMove;
+            }
+        }
+    }
+
+    // D) Full search (TURN-AWARE): respects movementTracker so the AI can plan multi-action turns.
+    // Also uses a transposition table so deeper tactics are feasible in the browser.
+    const tt = new Map();
+    const result = minimaxTurnAware(
+        gameState,
+        MAX_DEPTH,
+        -INFINITY,
+        INFINITY,
+        aiPlayerKey,
+        aiPlayerKey,
+        tt
     );
 
     const end = performance.now();
     console.log(`AI Thought Time: ${(end - start).toFixed(2)}ms | Score: ${result.score} | Move:`, result.move);
 
     return result.move;
-};
-
-/**
- * Minimax Algorithm with Alpha-Beta Pruning
- */
-const minimax = (state, depth, alpha, beta, isMaximizing, aiPlayerKey, isRecruitment) => {
-    // Base Case: Depth limit reached or Game Over
-    const outcome = checkGameOver(state);
-    const plyFromRoot = MAX_DEPTH - depth; // Track how far we are from root for eval gating
-    if (depth === 0 || outcome) {
-        return { score: evaluateState(state, aiPlayerKey, outcome, plyFromRoot) };
-    }
-
-    const currentPlayer = isMaximizing ? aiPlayerKey : (aiPlayerKey === 'p1' ? 'p2' : 'p1');
-    const possibleMoves = getAllPossibleMoves(state, currentPlayer, isRecruitment);
-
-    const orderedMoves = orderMovesByHeuristic(state, possibleMoves, currentPlayer);
-
-    if (orderedMoves.length === 0) {
-        return { score: evaluateState(state, aiPlayerKey, null, plyFromRoot) };
-    }
-
-    let bestMove = null;
-
-    if (isMaximizing) {
-        let maxEval = -INFINITY;
-        for (const move of orderedMoves) {
-            const nextState = applyMove(state, move);
-            const evalResult = minimax(nextState, depth - 1, alpha, beta, false, aiPlayerKey, isRecruitment);
-            
-            if (evalResult.score > maxEval) {
-                maxEval = evalResult.score;
-                bestMove = move;
-            }
-            alpha = Math.max(alpha, evalResult.score);
-            if (beta <= alpha) break; // Pruning
-        }
-        return { score: maxEval, move: bestMove };
-    } else {
-        let minEval = INFINITY;
-        for (const move of orderedMoves) {
-            const nextState = applyMove(state, move);
-            const evalResult = minimax(nextState, depth - 1, alpha, beta, true, aiPlayerKey, isRecruitment);
-            
-            if (evalResult.score < minEval) {
-                minEval = evalResult.score;
-                bestMove = move;
-            }
-            beta = Math.min(beta, evalResult.score);
-            if (beta <= alpha) break; // Pruning
-        }
-        return { score: minEval, move: bestMove };
-    }
 };
 
 /**
@@ -870,6 +1367,9 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
     const aiSafety = evaluateLeaderState(aiPlayerKey, state.placements, state.leadersPositions);
     const enemySafety = evaluateLeaderState(enemyKey, state.placements, state.leadersPositions);
 
+    // Detect if the enemy is turtling (full defense). Used to shift our strategy.
+    const enemyDefense = getEnemyFullDefenseInfo(state, enemyKey);
+
     if (aiSafety.captured || aiSafety.surrounded) score -= 10000; // Danger! (Increased from 5000)
     if (enemySafety.captured || enemySafety.surrounded) score += 10000; // Winning chance!
 
@@ -880,6 +1380,17 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
         const enemyLeaderId = state.leadersPositions[enemyKey];
         const enemyLeaderNode = NODE_MAP.get(enemyLeaderId);
 
+        // Escort heuristic (cheap): leader yang terlalu maju tanpa unit defensif = buruk.
+        const distLeaders = manhattanDist(aiLeaderId, enemyLeaderId);
+        const defendersNearLeader = (state.placements ?? []).filter((p) => {
+            if (!p || p.playerKey !== aiPlayerKey) return false;
+            const k = p.cardKey;
+            if (!(DEFENSIVE_UNITS.includes(k) || k === 'ourson')) return false;
+            return manhattanDist(p.nodeId, aiLeaderId) <= 2;
+        }).length;
+        if (distLeaders <= 5 && defendersNearLeader === 0) score -= 450;
+        if (distLeaders <= 4 && defendersNearLeader === 0) score -= 700;
+
         // Penalize nearby high-threat enemies (cheap distance-only)
         state.placements.forEach(p => {
             if (p.playerKey !== enemyKey) return;
@@ -887,20 +1398,86 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
             if (!unitNode || !aiLeaderNode) return;
             const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
             if (HIGH_THREAT_ABILITIES.includes(p.cardKey)) {
-                score -= Math.max(0, 5 - dist) * 120;
+                score -= Math.max(0, 5 - dist) * 170;
             } else {
-                score -= Math.max(0, 4 - dist) * 40;
+                score -= Math.max(0, 4 - dist) * 70;
             }
         });
 
         // Reward own units pressuring enemy leader (cheap distance-only)
+        // Diturunkan agar AI tidak terlalu agresif.
         state.placements.forEach(p => {
             if (p.playerKey !== aiPlayerKey) return;
             const unitNode = NODE_MAP.get(p.nodeId);
             if (!unitNode || !enemyLeaderNode) return;
             const dist = Math.abs(unitNode.col - enemyLeaderNode.col) + Math.abs(unitNode.row - enemyLeaderNode.row);
-            score += Math.max(0, 5 - dist) * 50;
+            score += Math.max(0, 5 - dist) * 15;
         });
+
+        // Turtle response (light):
+        // If enemy is in full defense, only commit:
+        // - Assassin solo (preferred), OR
+        // - Archer + 1 non-defensive attacker.
+        // Everyone else should stay near our leader.
+        if (enemyDefense.isFullDefense) {
+            const aiLeaderId = state.leadersPositions[aiPlayerKey];
+            const enemyLeaderId = state.leadersPositions[enemyKey];
+            const aiUnits = (state.placements ?? []).filter((p) => p?.playerKey === aiPlayerKey);
+
+            const hasAssassin = aiUnits.some((u) => u.cardKey === 'assassin');
+            const hasArcher = aiUnits.some((u) => u.cardKey === 'archere');
+            const allowedTokenKeys = new Set();
+
+            if (hasAssassin) {
+                // Allow assassin to be far.
+                aiUnits
+                    .filter((u) => u.cardKey === 'assassin')
+                    .forEach((u) => allowedTokenKeys.add(`${u.deckIndex ?? ''}:${u.tokenId ?? ''}:${u.nodeId ?? ''}`));
+
+                // Bonus for assassin proximity to enemy leader.
+                aiUnits
+                    .filter((u) => u.cardKey === 'assassin')
+                    .forEach((u) => {
+                        const d = manhattanDist(u.nodeId, enemyLeaderId);
+                        score += Math.max(0, 6 - d) * 180;
+                    });
+            } else if (hasArcher) {
+                // Allow archer + one best attacker.
+                const archer = aiUnits.find((u) => u.cardKey === 'archere');
+                if (archer) allowedTokenKeys.add(`${archer.deckIndex ?? ''}:${archer.tokenId ?? ''}:${archer.nodeId ?? ''}`);
+
+                const candidates = aiUnits.filter((u) => {
+                    const k = u.cardKey;
+                    const isDefensive = (DEFENSIVE_UNITS.includes(k) || k === 'ourson');
+                    return !isDefensive && k !== 'archere';
+                });
+                let bestAttacker = null;
+                let bestAttackerDist = Infinity;
+                for (const c of candidates) {
+                    const d = manhattanDist(c.nodeId, enemyLeaderId);
+                    if (d < bestAttackerDist) {
+                        bestAttackerDist = d;
+                        bestAttacker = c;
+                    }
+                }
+                if (bestAttacker) {
+                    allowedTokenKeys.add(`${bestAttacker.deckIndex ?? ''}:${bestAttacker.tokenId ?? ''}:${bestAttacker.nodeId ?? ''}`);
+                }
+            }
+
+            // Penalize all other non-defensive units that wander too far from our leader.
+            for (const u of aiUnits) {
+                const k = u.cardKey;
+                const isDefensive = (DEFENSIVE_UNITS.includes(k) || k === 'ourson');
+                if (isDefensive) continue;
+
+                const tokenKey = `${u.deckIndex ?? ''}:${u.tokenId ?? ''}:${u.nodeId ?? ''}`;
+                if (allowedTokenKeys.has(tokenKey)) continue;
+
+                const dOwn = manhattanDist(u.nodeId, aiLeaderId);
+                if (dOwn > 3) score -= (dOwn - 3) * 220;
+            }
+        }
 
         return score;
     }
@@ -1178,6 +1755,20 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
     if (safeEscapes === 0 && aiLeaderEmptySpaces > 0) {
         score -= 2000; // All escape routes are under threat!
     }
+
+    // If enemy is in full defense, we must also stay in full defense:
+    // prioritize keeping our leader uncatchable by maintaining escapes + a defender shell.
+    if (enemyDefense.isFullDefense) {
+        // Larger premium on safe escapes in turtle mode.
+        score += safeEscapes * 90;
+
+        // Strong penalty if we're low on mobility while enemy is turtling (they will wait for a mistake).
+        if (aiLeaderEmptySpaces <= 1) score -= 1200;
+        if (aiLeaderEmptySpaces === 0) score -= 2200;
+
+        // Extra penalty for any immediate checkmate warning while enemy turtles.
+        if (checkmateThreat.level >= 1) score -= 1200 * checkmateThreat.level;
+    }
     
     // E. Two-Turn Threat Detection
     // Check if enemy can set up a checkmate in 2 turns
@@ -1187,8 +1778,49 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
     }
 
     // =========================================================================
-    // F. OFFENSIVE EVALUATION - Attack Enemy Leader
+    // F. OFFENSE (scaled): Attack Enemy Leader
     // =========================================================================
+
+    // Leader protection is the priority. We compute offense separately and scale it down
+    // when leader is vulnerable / not escorted by defensive units.
+    const distLeaders = manhattanDist(state.leadersPositions[aiPlayerKey], state.leadersPositions[enemyKey]);
+    const aiUnits = state.placements.filter(p => p.playerKey === aiPlayerKey);
+    const aiDefenders = aiUnits.filter(u => (DEFENSIVE_UNITS.includes(u.cardKey) || u.cardKey === 'ourson'));
+    const aiLeaderNodeIdForEscort = state.leadersPositions[aiPlayerKey];
+    const defendersAdjacent = aiDefenders.filter(d => manhattanDist(d.nodeId, aiLeaderNodeIdForEscort) === 1).length;
+    const defendersNear = aiDefenders.filter(d => manhattanDist(d.nodeId, aiLeaderNodeIdForEscort) <= 2).length;
+    const leaderVulnerable = checkmateThreat.level >= 1 || aiLeaderEmptySpaces <= 2 || safeEscapes === 0;
+    const escorted = defendersNear >= 1;
+
+    // Strong penalty if leader advances without escort.
+    if (distLeaders <= 5 && !escorted) score -= 900;
+    if (distLeaders <= 4 && !escorted) score -= 1400;
+
+    // Strong reward for maintaining a defensive shell around leader.
+    score += defendersAdjacent * 260;
+    score += Math.max(0, defendersNear - defendersAdjacent) * 110;
+    if (leaderVulnerable) {
+        aiDefenders.forEach((d) => {
+            const dd = manhattanDist(d.nodeId, aiLeaderNodeIdForEscort);
+            if (dd > 2) score -= (dd - 2) * 140;
+        });
+    }
+
+    // Offense scaling: never zero (still can win), but much lower when unsafe.
+    let offenseFactor = leaderVulnerable ? 0.15 : 0.55;
+    if (distLeaders <= 5 && !escorted) offenseFactor = Math.min(offenseFactor, 0.10);
+
+    // If enemy is turtling: do not overcommit attackers.
+    // We still allow Assassin solo or Archer + 1 attacker, but the rest should prioritize defense.
+    if (enemyDefense.isFullDefense) {
+        offenseFactor = Math.min(offenseFactor, escorted ? 0.30 : 0.18);
+
+        // Enforce a "full defense" posture: if we don't have enough defenders near leader, punish hard.
+        if (defendersAdjacent < 2) score -= (2 - defendersAdjacent) * 900;
+        if (defendersNear < 3) score -= (3 - defendersNear) * 450;
+    }
+
+    let offenseScore = 0;
     
     const enemyLeaderNodeId = state.leadersPositions[enemyKey];
     const enemyLeaderPos = NODES.find(n => n.id === enemyLeaderNodeId);
@@ -1202,19 +1834,17 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
     
     // Bonus for trapping enemy leader
     if (enemyLeaderEmptySpaces <= 1) {
-        score += 3000; // Enemy almost trapped!
+        offenseScore += 3000; // Enemy almost trapped!
     } else if (enemyLeaderEmptySpaces <= 2) {
-        score += 1500; // Enemy mobility restricted
+        offenseScore += 1500; // Enemy mobility restricted
     } else if (enemyLeaderEmptySpaces <= 3) {
-        score += 500; // Some pressure
+        offenseScore += 500; // Some pressure
     }
     
     // F2. AI Units Pressure on Enemy Leader
     let aiUnitsAdjacentToEnemyLeader = 0;
     let aiUnitsNearEnemyLeader = 0; // Within 2 spaces
     let aiUnitsThreateningEnemyLeader = 0; // Can reach in 1 move (including abilities)
-    
-    const aiUnits = state.placements.filter(p => p.playerKey === aiPlayerKey);
     
     aiUnits.forEach(unit => {
         const unitNode = NODES.find(n => n.id === unit.nodeId);
@@ -1225,15 +1855,15 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
         // Adjacent to enemy leader
         if (enemyLeaderAdjacents.includes(unit.nodeId)) {
             aiUnitsAdjacentToEnemyLeader++;
-            score += 400; // Strong offensive position
+            offenseScore += 400; // Strong offensive position
         }
         
         // Near enemy leader (2-3 spaces)
         if (distToEnemyLeader <= 2) {
             aiUnitsNearEnemyLeader++;
-            score += 150;
+            offenseScore += 150;
         } else if (distToEnemyLeader <= 3) {
-            score += 50;
+            offenseScore += 50;
         }
         
         // Check if unit can threaten enemy leader with abilities
@@ -1241,65 +1871,65 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
             const targets = getClawLauncherTargets(unit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
             if (targets.some(t => t.nodeId === enemyLeaderNodeId)) {
                 aiUnitsThreateningEnemyLeader++;
-                score += 800; // Can pull enemy leader!
+                offenseScore += 800; // Can pull enemy leader!
             }
         }
         else if (unit.cardKey === 'manipulatrice') {
             const targets = getManipulatorTargets(unit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
             if (targets.some(t => t.nodeId === enemyLeaderNodeId)) {
                 aiUnitsThreateningEnemyLeader++;
-                score += 800; // Can move enemy leader!
+                offenseScore += 800; // Can move enemy leader!
             }
         }
         else if (unit.cardKey === 'cogneur') {
             const targets = getBruiserTargets(unit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
             if (targets.some(t => t.nodeId === enemyLeaderNodeId)) {
                 aiUnitsThreateningEnemyLeader++;
-                score += 600; // Can push enemy leader!
+                offenseScore += 600; // Can push enemy leader!
             }
         }
         else if (unit.cardKey === 'illusionniste') {
             const targets = getIllusionistTargets(unit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
             if (targets.some(t => t.nodeId === enemyLeaderNodeId)) {
                 aiUnitsThreateningEnemyLeader++;
-                score += 700; // Can swap with enemy leader!
+                offenseScore += 700; // Can swap with enemy leader!
             }
         }
         else if (unit.cardKey === 'cavalier') {
             const dashes = getRiderLandingOptions(unit.nodeId, state.placements, state.leadersPositions);
             if (dashes.some(destId => enemyLeaderAdjacents.includes(destId))) {
                 aiUnitsThreateningEnemyLeader++;
-                score += 500; // Can dash to enemy leader
+                offenseScore += 500; // Can dash to enemy leader
             }
         }
         else if (unit.cardKey === 'acrobate') {
             const jumps = getAcrobatLandingOptions(unit.nodeId, state.placements, state.leadersPositions);
             if (jumps.some(j => enemyLeaderAdjacents.includes(j.nodeId))) {
                 aiUnitsThreateningEnemyLeader++;
-                score += 500; // Can jump to enemy leader
+                offenseScore += 500; // Can jump to enemy leader
             }
         }
         else if (unit.cardKey === 'rodeuse') {
             const dests = getWandererDestinations(unit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
             if (dests.some(destId => enemyLeaderAdjacents.includes(destId))) {
                 aiUnitsThreateningEnemyLeader++;
-                score += 600; // Can wander to enemy leader
+                offenseScore += 600; // Can wander to enemy leader
             }
         }
         
         // Bonus for offensive positioning (closer to enemy = better)
-        score += Math.max(0, (7 - distToEnemyLeader) * 15);
+        offenseScore += Math.max(0, (7 - distToEnemyLeader) * 15);
     });
     
     // Combo bonus: Multiple units pressuring enemy leader
     if (aiUnitsAdjacentToEnemyLeader >= 2) {
-        score += 1000; // Pincer attack!
+        offenseScore += 1000; // Pincer attack!
     }
     if (aiUnitsNearEnemyLeader >= 3) {
-        score += 800; // Surrounding enemy
+        offenseScore += 800; // Surrounding enemy
     }
     if (aiUnitsThreateningEnemyLeader >= 2) {
-        score += 1200; // Multiple ability threats!
+        offenseScore += 1200; // Multiple ability threats!
     }
     
     // F3. Control Empty Spaces Around Enemy Leader
@@ -1310,18 +1940,18 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
             const aiThreats = countThreatsToNode(adjId, aiPlayerKey, state.placements, state.leadersPositions, 1);
             if (aiThreats.count > 0) {
                 aiControlledEnemyEscapes++;
-                score += 200; // Controlling enemy escape
+                offenseScore += 200; // Controlling enemy escape
             }
         }
     });
     
     // Huge bonus if all enemy escapes are under AI control
     if (aiControlledEnemyEscapes >= enemyLeaderEmptySpaces && enemyLeaderEmptySpaces > 0) {
-        score += 2000; // Checkmate setup!
+        offenseScore += 2000; // Checkmate setup!
     }
     
     // =========================================================================
-    // G. OFFENSIVE EVALUATION - Target Enemy Units
+    // G. OFFENSE (scaled): Target Enemy Units
     // =========================================================================
     
     const enemyUnits = state.placements.filter(p => p.playerKey === enemyKey);
@@ -1344,20 +1974,20 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
             
             // Adjacent = direct threat
             if (dist === 1) {
-                score += isDangerous ? 150 : 50; // Bonus for threatening enemy
+                offenseScore += isDangerous ? 150 : 50; // Bonus for threatening enemy
             }
             
             // Can capture/displace with ability?
             if (aiUnit.cardKey === 'lancegrappin') {
                 const targets = getClawLauncherTargets(aiUnit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
                 if (targets.some(t => t.nodeId === enemy.nodeId)) {
-                    score += isDangerous ? 300 : 100; // Can pull enemy
+                    offenseScore += isDangerous ? 300 : 100; // Can pull enemy
                 }
             }
             else if (aiUnit.cardKey === 'cogneur') {
                 const targets = getBruiserTargets(aiUnit.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
                 if (targets.some(t => t.nodeId === enemy.nodeId)) {
-                    score += isDangerous ? 250 : 80; // Can push enemy
+                    offenseScore += isDangerous ? 250 : 80; // Can push enemy
                 }
             }
         });
@@ -1371,26 +2001,26 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
         }).length;
         
         if (isDangerous && nearbyAI === 0) {
-            score -= 200; // Dangerous enemy roaming free
+            offenseScore -= 200; // Dangerous enemy roaming free
         }
     });
+
+    // Apply scaled offense at the end so defense dominates unless conditions are safe.
+    score += offenseScore * offenseFactor;
     
     // =========================================================================
-    // H. DEFENSIVE POSITIONING (Balanced)
+    // H. DEFENSIVE POSITIONING (Priority)
     // =========================================================================
-    
+
+    // Additional small formation score for ANY unit near leader.
+    // (The main defensive shell is already rewarded above for defensive units.)
     aiUnits.forEach(unit => {
         const unitNode = NODES.find(n => n.id === unit.nodeId);
         if (!unitNode || !aiLeaderPos) return;
-        
+
         const distToOwnLeader = Math.abs(unitNode.col - aiLeaderPos.col) + Math.abs(unitNode.row - aiLeaderPos.row);
-        
-        // Moderate bonus for protecting own leader (but don't over-prioritize)
-        if (distToOwnLeader === 1) {
-            score += 80; // Adjacent defender
-        } else if (distToOwnLeader === 2) {
-            score += 30; // Nearby support
-        }
+        if (distToOwnLeader === 1) score += 60;
+        else if (distToOwnLeader === 2) score += 15;
     });
     
     // I. Leader Mobility Balance
@@ -1421,8 +2051,22 @@ const getAllPossibleMoves = (state, playerKey, isRecruitment) => {
         if (!hasLeaderMoved) {
             const leaderNodeId = state.leadersPositions[playerKey];
             const leaderAdjacents = getAdjacentNodeIds(NODES, leaderNodeId);
+
+            // Avoid "konyol" leader moves: stepping into a square with >=2 adjacent enemy characters
+            // (often means walking between two enemies), unless we're already under equal/worse pressure.
+            const beforeEnemyAdj = countAdjacentEnemyCharacters(leaderNodeId, playerKey, state.placements, state.leadersPositions);
             leaderAdjacents.forEach(targetId => {
                 if (isNodeEmpty(targetId, state.placements, state.leadersPositions)) {
+                    const afterEnemyAdj = countAdjacentEnemyCharacters(targetId, playerKey, state.placements, state.leadersPositions);
+
+                    // Never allow immediate self-trap / capture.
+                    const nextLeaderPositions = { ...state.leadersPositions, [playerKey]: targetId };
+                    if (evaluateLeaderState(playerKey, state.placements, nextLeaderPositions).captured) return;
+                    if (evaluateLeaderState(playerKey, state.placements, nextLeaderPositions).surrounded) return;
+
+                    // Blunder filter: don't increase adjacency pressure to 2+.
+                    if (afterEnemyAdj >= 2 && afterEnemyAdj > beforeEnemyAdj) return;
+
                     moves.push({ type: 'MOVE_LEADER', from: leaderNodeId, to: targetId });
                 }
             });
@@ -1433,6 +2077,10 @@ const getAllPossibleMoves = (state, playerKey, isRecruitment) => {
         const playerUnits = state.placements.filter(unit => unit && unit.playerKey === playerKey);
         
         playerUnits.forEach(unit => {
+            // Nemesis cannot take an action during its action phase.
+            // It only moves via the forced off-turn reaction when the opponent leader moves.
+            if (unit.cardKey === 'nemesis') return;
+
             // Check if unit has already moved this turn
             const unitKey = unit.tokenId != null ? `${unit.deckIndex}:${unit.tokenId}` : `${unit.deckIndex}`;
             const hasUnitMoved = movedUnits.includes(unitKey);
@@ -1479,21 +2127,18 @@ const getAllPossibleMoves = (state, playerKey, isRecruitment) => {
             else if (unit.cardKey === 'manipulatrice') {
                 const targets = getManipulatorTargets(unit.nodeId, playerKey, state.placements, state.leadersPositions);
                 targets.forEach(target => {
-                    // Try moving target to all adjacent empty spots
-                    const targetAdjacents = getAdjacentNodeIds(NODES, target.nodeId);
-                    targetAdjacents.forEach(destId => {
-                        if (isNodeEmpty(destId, state.placements, state.leadersPositions)) {
-                            moves.push({ 
-                                type: 'USE_ABILITY', 
-                                ability: 'manipulatrice', 
-                                unitId: unit.nodeId, 
-                                targetId: target.nodeId,
-                                to: destId,
-                                deckIndex: unit.deckIndex,
-                                tokenId: unit.tokenId
-                            });
-                        }
-                    });
+                    const destId = target.prevToTargetId;
+                    if (destId != null && isNodeEmpty(destId, state.placements, state.leadersPositions)) {
+                        moves.push({
+                            type: 'USE_ABILITY',
+                            ability: 'manipulatrice',
+                            unitId: unit.nodeId,
+                            targetId: target.nodeId,
+                            to: destId,
+                            deckIndex: unit.deckIndex,
+                            tokenId: unit.tokenId
+                        });
+                    }
                 });
             }
             else if (unit.cardKey === 'lancegrappin') {
@@ -1608,7 +2253,22 @@ const applyMove = (state, move) => {
             p1: [...state.decks.p1], 
             p2: [...state.decks.p2] 
         },
-        leaders: [...state.leaders] // Recruitment pool
+        leaders: [...state.leaders], // Recruitment pool
+        movementTracker: cloneMovementTracker(state.movementTracker)
+    };
+
+    // Helper: mark a unit as having used its action this turn.
+    const markUnitMovedInState = (piece) => {
+        if (!piece?.playerKey) return;
+        const key = piece?.tokenId != null
+            ? `${piece.deckIndex}:${piece.tokenId}`
+            : `${piece.deckIndex}`;
+        const existing = newState.movementTracker?.[piece.playerKey]?.units ?? [];
+        if (existing.includes(key)) return;
+        newState.movementTracker[piece.playerKey] = {
+            ...newState.movementTracker[piece.playerKey],
+            units: [...existing, key],
+        };
     };
 
     if (move.type === 'RECRUIT') {
@@ -1640,17 +2300,24 @@ const applyMove = (state, move) => {
         const playerKey = Object.keys(newState.leadersPositions).find(k => newState.leadersPositions[k] === move.from);
         if (playerKey) {
             newState.leadersPositions[playerKey] = move.to;
+            newState.movementTracker[playerKey] = {
+                ...newState.movementTracker[playerKey],
+                leader: true,
+            };
         }
     } else if (move.type === 'MOVE_UNIT') {
         const unitIndex = newState.placements.findIndex(p => p.nodeId === move.unitId);
         if (unitIndex !== -1) {
+            const movedPiece = newState.placements[unitIndex];
             newState.placements[unitIndex] = {
                 ...newState.placements[unitIndex],
                 nodeId: move.to
             };
+            markUnitMovedInState(movedPiece);
         }
     } else if (move.type === 'USE_ABILITY') {
         const unitIndex = newState.placements.findIndex(p => p.nodeId === move.unitId);
+        const movedPiece = unitIndex !== -1 ? newState.placements[unitIndex] : null;
         const getLeaderAtNode = (nodeId) => {
             if (newState.leadersPositions.p1 === nodeId) return 'p1';
             if (newState.leadersPositions.p2 === nodeId) return 'p2';
@@ -1707,6 +2374,9 @@ const applyMove = (state, move) => {
                 newState.leadersPositions[leaderKey] = unitPos;
             }
         }
+
+        // Abilities consume the unit's action for this turn.
+        if (movedPiece) markUnitMovedInState(movedPiece);
     }
 
     return newState;

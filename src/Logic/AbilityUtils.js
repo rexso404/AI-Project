@@ -72,12 +72,23 @@ const getRayFromNeighbor = (originId, firstId) => {
 export const getManipulatorTargets = (originNodeId, playerKey, placements, leadersPositions) => {
     // Use the same hex "raycasting" as ClawLauncher so Manipulator sees in
     // all straight-line directions on this board.
+    // But per game rule customization: Manipulator cannot control horizontally,
+    // so we disallow horizontal rays (same y within FLOAT_TOLERANCE).
     const enemyKey = playerKey === 'p1' ? 'p2' : 'p1';
+    const originNode = NODE_MAP.get(originNodeId);
     const adjacent = getAdjacentNodeIds(NODES, originNodeId);
     const targets = [];
     const seenTargets = new Set();
 
     for (const firstId of adjacent) {
+        if (originNode) {
+            const firstNode = NODE_MAP.get(firstId);
+            if (firstNode && Math.abs(firstNode.y - originNode.y) <= FLOAT_TOLERANCE) {
+                // Horizontal ray: not allowed for Manipulator.
+                continue;
+            }
+        }
+
         const ray = getRayFromNeighbor(originNodeId, firstId);
         if (!ray.length) continue;
 

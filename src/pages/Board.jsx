@@ -45,6 +45,8 @@ import {
   getRiderLandingOptions
 } from '../Logic/GameUtils';
 
+import { getManipulatorTargets } from '../Logic/AbilityUtils';
+
 
 import CardSlot from '../components/CardSlot.jsx';
 import RecruitOptionCard from '../components/RecruitOptionCard.jsx';
@@ -231,7 +233,8 @@ const Board = ({ gameMode = 'player' }) => {
   
   // Ref to hold mutable AI state (avoids stale closure issues)
   const aiActionRef = useRef({
-    moveCount: 0
+    moveCount: 0,
+    invalidMoves: 0,
   });
 
   // Forward declare AI functions (will be defined after helpers)
@@ -249,6 +252,24 @@ const Board = ({ gameMode = 'player' }) => {
 
   function executeAIMove(move) {
     console.log("Executing AI Move:", move);
+
+    // Safety guard: AI must never execute actions using Player 1 pieces.
+    // If the planner returns an invalid move, retry a few times then end turn.
+    const aiKey = 'p2';
+    const actorNodeId = move?.unitId;
+    const actorPlacement = actorNodeId ? placements.find((p) => p.nodeId === actorNodeId) : null;
+    const isActorOwnedByAI = !actorNodeId || (actorPlacement && actorPlacement.playerKey === aiKey);
+    const isActorMove = move?.type === 'MOVE_UNIT' || move?.type === 'USE_ABILITY';
+    if (isActorMove && !isActorOwnedByAI) {
+      console.warn('[AI] Refusing to execute move with non-AI unit:', move);
+      aiActionRef.current.invalidMoves += 1;
+      setAiThinking(false);
+      if (aiActionRef.current.invalidMoves >= 3) {
+        console.warn('[AI] Too many invalid moves; ending turn.');
+        if (handleAITurnEndRef.current) handleAITurnEndRef.current();
+      }
+      return;
+    }
 
     if (move.type === 'RECRUIT') {
       if (gameMode === 'ai') {
@@ -465,7 +486,7 @@ const Board = ({ gameMode = 'player' }) => {
         
         // Update Deck boardNodeId reference
         const unit = placements.find(p => p.nodeId === move.unitId);
-        if (unit) {
+        if (unit && unit.playerKey === 'p2') {
              // Inline markUnitMoved
              const key = unit.tokenId != null ? `${unit.deckIndex}:${unit.tokenId}` : `${unit.deckIndex}`;
              setMovementTracker((prev) => {
@@ -509,6 +530,18 @@ const Board = ({ gameMode = 'player' }) => {
         const unitIndex = updatedPlacements.findIndex(p => p.nodeId === move.unitId);
         if (unitIndex !== -1) {
             unitToMark = updatedPlacements[unitIndex];
+        }
+
+        // Extra safety: only mark AI units as having acted.
+        if (unitToMark && unitToMark.playerKey !== 'p2') {
+          console.warn('[AI] Refusing to execute ability using non-AI unit:', move);
+          aiActionRef.current.invalidMoves += 1;
+          setAiThinking(false);
+          if (aiActionRef.current.invalidMoves >= 3) {
+            console.warn('[AI] Too many invalid moves; ending turn.');
+            if (handleAITurnEndRef.current) handleAITurnEndRef.current();
+          }
+          return;
         }
 
         if (['acrobate', 'cavalier', 'garderoyal', 'rodeuse'].includes(move.ability)) {
@@ -825,57 +858,15 @@ const Board = ({ gameMode = 'player' }) => {
 
 
   const initializeManipulatorAbility = (piece, deckCard) => {
-    const originNode = nodeMap.get(piece.nodeId);
-    if (!originNode) return null;
+    const targets = getManipulatorTargets(piece.nodeId, piece.playerKey, placements, leadersPositions);
 
-    const enemyKey = piece.playerKey === 'p1' ? 'p2' : 'p1';
-    const enemyCandidates = [
-      ...placements
-        .filter(unit => unit.playerKey === enemyKey)
-        .map(unit => ({ ...unit, type: 'unit' })),
-      {
-        type: 'leader',
-        playerKey: enemyKey,
-        nodeId: leadersPositions[enemyKey],
-      },
-    ].filter(candidate => !!candidate.nodeId);
-
-    const inLineEnemies = enemyCandidates.filter(target => {
-      const targetNode = nodeMap.get(target.nodeId);
-      if (!targetNode) return false;
-
-      const sameCol = Math.abs(targetNode.x - originNode.x) <= FLOAT_TOLERANCE;
-      const sameRow = Math.abs(targetNode.y - originNode.y) <= FLOAT_TOLERANCE;
-      if (!sameCol && !sameRow) return false;
-
-      const dx = targetNode.x - originNode.x;
-      const dy = targetNode.y - originNode.y;
-      if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) return false; // must be non-adjacent
-
-      const stepX = dx === 0 ? 0 : dx > 0 ? 1 : -1;
-      const stepY = dy === 0 ? 0 : dy > 0 ? 1 : -1;
-
-      let currentX = originNode.x + stepX;
-      let currentY = originNode.y + stepY;
-      while (Math.abs(currentX - targetNode.x) > FLOAT_TOLERANCE || Math.abs(currentY - targetNode.y) > FLOAT_TOLERANCE) {
-        const blocker = findNodeByCoordinates(currentX, currentY);
-        if (blocker) {
-          const occ = getNodeOccupant(blocker.id, leadersPositions, placements);
-          if (occ) return false;
-        }
-        currentX += stepX;
-        currentY += stepY;
-      }
-      return true;
-    });
-
-    if (!inLineEnemies.length) {
+    if (!targets.length) {
       setStatusMessage('Tidak ada musuh non-adjacent yang terlihat dalam garis lurus.');
       return null;
     }
 
-    const highlightNodes = inLineEnemies.map(target => target.nodeId);
-    setStatusMessage('Pilih satu musuh yang disorot, lalu pilih petak di sekitarnya.');
+    const highlightNodes = targets.map(target => target.nodeId);
+    setStatusMessage('Pilih satu musuh yang disorot untuk didorong 1 langkah ke arah Manipulator.');
     return {
       id: piece.cardKey,
       abilityName: resolveCharacterName(piece, deckCard),
@@ -888,12 +879,13 @@ const Board = ({ gameMode = 'player' }) => {
       highlightNodes,
       data: {
         hasProgress: false,
-        targets: inLineEnemies.map(target => ({
+        targets: targets.map(target => ({
           type: target.type,
           nodeId: target.nodeId,
           playerKey: target.playerKey,
           deckIndex: target.type === 'unit' ? target.deckIndex : null,
           tokenId: target.type === 'unit' ? (target.tokenId ?? null) : null,
+          prevToTargetId: target.prevToTargetId ?? null,
         })),
       },
     };
@@ -1316,7 +1308,7 @@ const Board = ({ gameMode = 'player' }) => {
   };
 
   const startAbilityForPiece = (piece) => {
-    if (!piece || isGameOver || selectedSummon?.forced || abilityContext) return;
+    if (!piece || isGameOver || abilityContext) return;
     if (hasUnitMoved(piece.playerKey, piece.deckIndex, piece.tokenId)) return;
     const deckCard = decks[piece.playerKey]?.[piece.deckIndex];
     const abilityType = deckCard?.abilityType ?? piece.abilityType;
@@ -1421,6 +1413,7 @@ const Board = ({ gameMode = 'player' }) => {
     }
   }, [selectedSummon, abilityContext]);
 
+
   const handleAbilityNodeInteraction = (node) => {
     if (!abilityContext || !node) return;
     if (abilityContext.highlightNodes?.length && !abilityContext.highlightNodes.includes(node.id)) {
@@ -1520,18 +1513,17 @@ const Board = ({ gameMode = 'player' }) => {
           return;
         }
 
-        const options = getAdjacentNodeIds(nodes, node.id).filter(id =>
-          isNodeEmpty(id, placements, leadersPositions)
-        );
-        if (!options.length) {
-          setStatusMessage('Tidak ada petak kosong di sekitar target.');
+        const targetMeta = abilityContext.data?.targets?.find((t) => t?.nodeId === node.id);
+        const forcedDest = targetMeta?.prevToTargetId ?? null;
+        if (forcedDest == null || !isNodeEmpty(forcedDest, placements, leadersPositions)) {
+          setStatusMessage('Tidak ada petak kosong untuk mendorong target ke arah Manipulator.');
           return;
         }
 
         setAbilityContext({
           ...abilityContext,
           phase: 'manipulator-select-destination',
-          highlightNodes: options,
+          highlightNodes: [forcedDest],
           data: {
             ...abilityContext.data,
             hasProgress: true,
@@ -1541,10 +1533,11 @@ const Board = ({ gameMode = 'player' }) => {
               playerKey: targetOcc.playerKey,
               deckIndex: targetOcc.type === 'unit' ? targetOcc.deckIndex : null,
               tokenId: targetOcc.type === 'unit' ? (targetOcc.tokenId ?? null) : null,
+              prevToTargetId: forcedDest,
             },
           },
         });
-        setStatusMessage('Pilih petak kosong di sekitar target untuk memindahkannya 1 langkah.');
+        setStatusMessage('Pilih petak yang disorot untuk mendorong target 1 langkah ke arah Manipulator.');
         return;
       }
 
@@ -1561,6 +1554,12 @@ const Board = ({ gameMode = 'player' }) => {
         }
         if (!isNodeEmpty(node.id, placements, leadersPositions)) {
           setStatusMessage('Petak ini sudah terisi.');
+          return;
+        }
+
+        // Safety: enforce forced destination.
+        if (selectedTarget.prevToTargetId != null && node.id !== selectedTarget.prevToTargetId) {
+          setStatusMessage('Manipulator hanya dapat mendorong target ke petak yang disorot.');
           return;
         }
 
@@ -2424,39 +2423,12 @@ const Board = ({ gameMode = 'player' }) => {
   }, [abilityContext, gameMode, isGameOver, turnCount, leaders, decks, placements, leadersPositions, movementTracker, retiredCards, recruitPickRemaining, nodes]);
 
   // --- AI Integration ---
-  useEffect(() => {
-    // If a forced interaction is active (e.g., Nemesis reaction), pause AI until resolved.
-    if (abilityContext?.data?.isForced) return;
-    if (gameMode === 'ai' && currentTurn === 'Player 2' && !isGameOver) {
-      const ai = new GameAI({
-        leaders,
-        decks,
-        placements,
-        leadersPositions,
-        currentTurn,
-        movementTracker,
-        retiredCards,
-        recruitPickRemaining,
-      });
-
-      const timer = setTimeout(() => {
-        const move = ai.decideMove('p2');
-        if (move) {
-          executeAIMove(move);
-        } else {
-          console.warn('AI found no valid move. Skipping turn.');
-          toggleTurn();
-        }
-      }, 1000);
-
-      return () => clearTimeout(timer);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [abilityContext, currentTurn, gameMode, isGameOver, leaders, decks, placements, leadersPositions, movementTracker, recruitPickRemaining, retiredCards]);
+  // NOTE: AI turn execution is handled by the orchestration effect below.
 
   // Reset AI move counter when the turn changes.
   useEffect(() => {
     aiActionRef.current.moveCount = 0;
+    aiActionRef.current.invalidMoves = 0;
   }, [currentTurn]);
 
   const endPhase = () => {
@@ -2469,6 +2441,7 @@ const Board = ({ gameMode = 'player' }) => {
   const handleAITurnEnd = useCallback(() => {
     console.log("AI Turn Complete. Switching to Player 1.");
     aiActionRef.current.moveCount = 0;
+    aiActionRef.current.invalidMoves = 0;
     setCurrentTurn('Player 1');
     setSelectedLeader(null);
     setSelectedUnit(null);
@@ -2670,7 +2643,28 @@ const Board = ({ gameMode = 'player' }) => {
     return false;
   };
 
-  const getNemesisReactionDestinations = (originNodeId, placementsState, leaderPositionsState) => {
+  const getGraphDistance = (fromId, toId) => {
+    if (fromId == null || toId == null) return Infinity;
+    if (fromId === toId) return 0;
+
+    const visited = new Set([fromId]);
+    const queue = [{ id: fromId, dist: 0 }];
+
+    while (queue.length) {
+      const cur = queue.shift();
+      const neighbors = getAdjacentNodeIds(nodes, cur.id);
+      for (const next of neighbors) {
+        if (visited.has(next)) continue;
+        if (next === toId) return cur.dist + 1;
+        visited.add(next);
+        queue.push({ id: next, dist: cur.dist + 1 });
+      }
+    }
+
+    return Infinity;
+  };
+
+  const getNemesisReactionDestinations = (originNodeId, movedLeaderNodeId, placementsState, leaderPositionsState) => {
     const step1 = getAdjacentNodeIds(nodes, originNodeId).filter((id) =>
       isNodeEmpty(id, placementsState, leaderPositionsState)
     );
@@ -2683,12 +2677,20 @@ const Board = ({ gameMode = 'player' }) => {
       options.forEach((id) => step2.add(id));
     }
 
-    if (step2.size > 0) {
-      return { steps: 2, destinations: Array.from(step2) };
+    // Nemesis step rule:
+    // - Far from the moved enemy leader -> must move 2 steps (if possible)
+    // - Close to the moved enemy leader -> must move 1 step
+    // Interpret "close" as graph distance <= 2.
+    const distToMovedLeader = getGraphDistance(originNodeId, movedLeaderNodeId);
+    const requiredSteps = distToMovedLeader <= 2 ? 1 : 2;
+
+    if (requiredSteps === 2) {
+      if (step2.size > 0) return { steps: 2, destinations: Array.from(step2) };
+      if (step1.length > 0) return { steps: 1, destinations: step1 };
+      return { steps: 0, destinations: [] };
     }
-    if (step1.length > 0) {
-      return { steps: 1, destinations: step1 };
-    }
+
+    if (step1.length > 0) return { steps: 1, destinations: step1 };
     return { steps: 0, destinations: [] };
   };
 
@@ -2697,8 +2699,12 @@ const Board = ({ gameMode = 'player' }) => {
     const nemesisPiece = placementsState.find((p) => p.playerKey === nemesisOwnerKey && p.cardKey === 'nemesis');
     if (!nemesisPiece) return false;
 
+    const movedLeaderNodeId = leaderPositionsState?.[movedLeaderKey];
+    if (movedLeaderNodeId == null) return false;
+
     const { steps, destinations } = getNemesisReactionDestinations(
       nemesisPiece.nodeId,
+      movedLeaderNodeId,
       placementsState,
       leaderPositionsState
     );
@@ -2783,13 +2789,20 @@ const Board = ({ gameMode = 'player' }) => {
     }
     const nodeId = node.id;
 
-    if (selectedSummon) {
-      attemptPlacement(node);
-      return;
-    }
+    // During recruit/placement, allow normal movement/ability interactions.
+    // Only interpret a click as a placement attempt when no piece is currently selected.
+    if (selectedSummon && !selectedLeader && !selectedUnit) {
+      const placementPlayerKey = selectedSummon.playerKey;
+      const canAttemptPlacement =
+        Boolean(placementPlayerKey)
+        && isValidPlacementNode(placementPlayerKey, node)
+        && isNodeEmpty(nodeId, placements, leadersPositions);
 
-    if (canPickFor && canPickFor === currentTurn) {
-      return;
+      if (canAttemptPlacement) {
+        attemptPlacement(node);
+        return;
+      }
+      // Otherwise fall through (so clicking units/destinations still works).
     }
 
     // If clicking on a node that has a leader
@@ -2817,6 +2830,10 @@ const Board = ({ gameMode = 'player' }) => {
     const currentPlayerKey = playerLabelToKey(currentTurn);
     const clickedUnit = placements.find(piece => piece.playerKey === currentPlayerKey && piece.nodeId === nodeId);
     if (clickedUnit) {
+      if (clickedUnit.cardKey === 'nemesis') {
+        setStatusMessage('Nemesis tidak dapat bergerak pada action phase; hanya bergerak saat Leader lawan bergerak.');
+        return;
+      }
       if (hasUnitMoved(currentPlayerKey, clickedUnit.deckIndex, clickedUnit.tokenId)) {
         return;
       }
@@ -2875,6 +2892,10 @@ const Board = ({ gameMode = 'player' }) => {
     if (selectedUnit) {
       const fromNode = selectedUnit.nodeId;
       const toNode = nodeId;
+      if (selectedUnit.cardKey === 'nemesis') {
+        setStatusMessage('Nemesis tidak dapat bergerak pada action phase; hanya bergerak saat Leader lawan bergerak.');
+        return;
+      }
       if (isNodeEmpty(toNode, placements, leadersPositions) && isWithinMoveRange(nodes, fromNode, toNode)) {
         const playerKey = selectedUnit.playerKey;
         if (gameMode === 'ai') {
@@ -3346,6 +3367,61 @@ const Board = ({ gameMode = 'player' }) => {
                   const haloClass = canMoveHere ? 'bg-yellow-200/25 shadow-[0_0_18px_rgba(255,215,0,0.75)]' : '';
                   const hoverClass = nodeImage ? 'hover:bg-white/10' : 'hover:bg-white/20';
 
+                  // Ability ghost preview: show a translucent image on highlighted destination nodes
+                  // that are actually occupiable (empty).
+                  const isAbilityDestination = Boolean(
+                    abilityContext &&
+                    abilityContext?.highlightNodes?.includes(node.id) &&
+                    isNodeEmpty(node.id, placements, leadersPositions)
+                  );
+
+                  const getOccupantImageForContext = (occ) => {
+                    if (!occ) return null;
+                    if (occ.type === 'leader') return gameLeaders?.[occ.playerKey]?.boardImage ?? null;
+                    const unit = placements.find(p =>
+                      p.playerKey === occ.playerKey &&
+                      p.deckIndex === occ.deckIndex &&
+                      (occ.tokenId == null || p.tokenId === occ.tokenId)
+                    );
+                    return unit?.image ?? null;
+                  };
+
+                  let ghostImage = null;
+                  if (isAbilityDestination) {
+                    // Actor image (self-move abilities)
+                    const actor = getAbilityPieceInstance(abilityContext);
+                    const actorImage = actor?.image ?? null;
+
+                    if (abilityContext.id === 'nemesis') {
+                      ghostImage = actorImage;
+                    }
+                    else if (abilityContext.id === 'acrobate' || abilityContext.id === 'cavalier' || abilityContext.id === 'garderoyal') {
+                      ghostImage = actorImage;
+                    }
+                    else if (abilityContext.id === 'lancegrappin' && abilityContext.phase === 'claw-select-action') {
+                      const moveSelfId = abilityContext.data?.moveSelfId ?? null;
+                      const dragId = abilityContext.data?.dragId ?? null;
+                      const selectedTarget = abilityContext.data?.selectedTarget ?? null;
+                      if (moveSelfId && node.id === moveSelfId) {
+                        ghostImage = actorImage;
+                      } else if (dragId && node.id === dragId) {
+                        ghostImage = getOccupantImageForContext(selectedTarget);
+                      }
+                    }
+                    else if (abilityContext.id === 'tavernier' && abilityContext.phase === 'brew-select-destination') {
+                      const selectedAlly = abilityContext.data?.selectedAlly ?? null;
+                      ghostImage = getOccupantImageForContext(selectedAlly);
+                    }
+                    else if (abilityContext.id === 'cogneur' && abilityContext.phase === 'bruiser-select-destination') {
+                      const selectedTarget = abilityContext.data?.selectedTarget ?? null;
+                      ghostImage = getOccupantImageForContext(selectedTarget);
+                    }
+                    else if (abilityContext.id === 'manipulatrice' && abilityContext.phase === 'manipulator-select-destination') {
+                      const selectedTarget = abilityContext.data?.selectedTarget ?? null;
+                      ghostImage = getOccupantImageForContext(selectedTarget);
+                    }
+                  }
+
                   const pieceDeckCard = placedPiece ? decks[placedPiece.playerKey]?.[placedPiece.deckIndex] : null;
                   const abilityType = pieceDeckCard?.abilityType ?? placedPiece?.abilityType;
                   const isCurrentPlayersPiece = occupantPlayerKey && playerKeyToLabel(occupantPlayerKey) === currentTurn;
@@ -3358,7 +3434,6 @@ const Board = ({ gameMode = 'player' }) => {
                     hasActiveAbility &&
                     IMPLEMENTED_ACTIVE_ABILITIES.has(placedPiece?.cardKey) &&
                     isCurrentPlayersPiece &&
-                    !selectedSummon?.forced &&
                     !abilityContext &&
                     !hasUnitMoved(occupantPlayerKey, placedPiece?.deckIndex ?? null, placedPiece?.tokenId ?? null) &&
                     !isAbilitySilencedByJailer(placedPiece)
@@ -3384,6 +3459,15 @@ const Board = ({ gameMode = 'player' }) => {
                           className={`w-full h-full object-cover transition-all duration-200 ${opacityClass} ${isPlayer1Turn ? 'rotate-180' : ''}`}
                         />
                       )}
+
+                      {ghostImage && (
+                        <img
+                          src={ghostImage}
+                          alt=""
+                          className={`absolute inset-0 w-full h-full object-cover opacity-40 grayscale contrast-75 pointer-events-none ${isPlayer1Turn ? 'rotate-180' : ''}`}
+                        />
+                      )}
+
                       {hasActiveAbility && placedPiece && (
                         <button
                           type="button"
@@ -3442,7 +3526,7 @@ const Board = ({ gameMode = 'player' }) => {
                   const isSummonSelected = selectedSummon && selectedSummon.playerKey === 'p1' && selectedSummon.cardIndex === idx;
                   const isUnitSelected = selectedUnit && selectedUnit.playerKey === 'p1' && selectedUnit.deckIndex === idx;
                   const unitAlreadyMoved = deployed && cardPlacements.every(p => hasUnitMoved('p1', idx, p.tokenId ?? null));
-                  const allowMoveSelection = deployed && !unitAlreadyMoved && !selectedSummon && !canPickFor;
+                  const allowMoveSelection = deployed && !unitAlreadyMoved && !selectedSummon?.forced;
                   const allowSummonSelection = !deployed && !selectedSummon?.forced;
                   const canInteract = currentTurn === 'Player 1' && Boolean(card) && (allowMoveSelection || allowSummonSelection);
                   const cursorClass = canInteract ? 'cursor-pointer hover:-translate-y-1 transition-transform' : 'cursor-not-allowed';
@@ -3501,7 +3585,7 @@ const Board = ({ gameMode = 'player' }) => {
                   const isSummonSelected = selectedSummon && selectedSummon.playerKey === 'p2' && selectedSummon.cardIndex === idx;
                   const isUnitSelected = selectedUnit && selectedUnit.playerKey === 'p2' && selectedUnit.deckIndex === idx;
                   const unitAlreadyMoved = deployed && cardPlacements.every(p => hasUnitMoved('p2', idx, p.tokenId ?? null));
-                  const allowMoveSelection = deployed && !unitAlreadyMoved && !selectedSummon && !canPickFor;
+                  const allowMoveSelection = deployed && !unitAlreadyMoved && !selectedSummon?.forced;
                   const allowSummonSelection = !deployed && !selectedSummon?.forced;
                   const canInteract = currentTurn === 'Player 2' && Boolean(card) && (allowMoveSelection || allowSummonSelection);
                   const cursorClass = canInteract ? 'cursor-pointer hover:-translate-y-1 transition-transform' : 'cursor-not-allowed';
