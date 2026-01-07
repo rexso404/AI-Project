@@ -1,0 +1,3 @@
+1. Pastikan mempunyai node.js dan laptop dan internet.
+2. Lakukan npm install, tunggu sampai semua package sudah terintall semua
+3. Jika sudah selesai, lakukan npm run dev
