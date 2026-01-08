@@ -240,6 +240,22 @@ const scoreMoveHeuristic = (state, move, currentPlayer) => {
         }
     }
 
+    // Turtle-vs-turtle: even if the enemy isn't currently within 2 tiles,
+    // keep our full-defense shell intact so we don't "open" the leader.
+    if (ourDefense.isFullDefense && enemyDefense.isFullDefense) {
+        const isSelfMove = (move.to != null && move.unitId != null);
+        if (isSelfMove) {
+            const before = manhattanDist(move.unitId, ownLeaderId);
+            const after = manhattanDist(move.to, ownLeaderId);
+            const k = move.cardKey;
+            const isDefender = Boolean(k && (DEFENSIVE_UNITS.includes(k) || k === 'ourson'));
+
+            // Don't peel off adjacent defenders during a full-defense standoff.
+            if (isDefender && before <= 1 && after > 1) score -= 55;
+            if (k === 'protecteur' && before <= 2 && after > 2) score -= 85;
+        }
+    }
+
     // Prefergerakan unit defensif agar dekat leader sendiri (proteksi + escort)
     if (actorKey && (DEFENSIVE_UNITS.includes(actorKey) || actorKey === 'ourson')) {
         if (move.to != null && move.unitId != null) {
@@ -300,6 +316,133 @@ const scoreMoveHeuristic = (state, move, currentPlayer) => {
     }
 
     return score;
+};
+
+// Turtle-vs-turtle helper: keep OUR full defense, but still attack if the enemy has a gap.
+// - If enemy has a gap (empty adjacent to enemy leader): prefer filling that gap safely.
+// - If enemy has no gap: keep full defense and try to CREATE a gap using units already near enemy leader.
+const findBestSafeAttackWhileMaintainingFullDefense = (state, aiPlayerKey, startedAt, totalBudgetMs) => {
+    const enemyKey = otherPlayerKey(aiPlayerKey);
+    const enemyDefenseNow = getEnemyFullDefenseInfo(state, enemyKey);
+    const ourDefenseNow = getOurDefenseInfo(state, aiPlayerKey);
+
+    if (!enemyDefenseNow.isFullDefense || !ourDefenseNow.isFullDefense) return null;
+
+    const enemyLeaderId = state?.leadersPositions?.[enemyKey];
+    const ownLeaderId = state?.leadersPositions?.[aiPlayerKey];
+    if (enemyLeaderId == null || ownLeaderId == null) return null;
+
+    const enemyGapNow = (enemyDefenseNow?.stats?.emptyAdjacentCount ?? 0) > 0;
+    const enemyAdjIds = enemyDefenseNow?.stats?.adjacentIds ?? [];
+
+    const moves = orderMovesForForcedScan(state, getAllPossibleMoves(state, aiPlayerKey, false), aiPlayerKey);
+
+    let bestMove = null;
+    let bestScore = -INFINITY;
+    let checked = 0;
+
+    for (const move of moves) {
+        if (checked >= 22 || isTimeUp(startedAt, totalBudgetMs)) break;
+
+        // Keep it simple/safe: do not move the leader in turtle-vs-turtle.
+        if (move?.type === 'MOVE_LEADER') {
+            checked++;
+            continue;
+        }
+
+        // Avoid peeling off adjacent defenders while in full defense.
+        if (move?.type === 'MOVE_UNIT' && move?.to != null && move?.unitId != null) {
+            const k = move.cardKey;
+            const isDef = (DEFENSIVE_UNITS.includes(k) || k === 'ourson');
+            if (isDef) {
+                const before = manhattanDist(move.unitId, ownLeaderId);
+                const after = manhattanDist(move.to, ownLeaderId);
+                if (before <= 1 && after > 1) {
+                    checked++;
+                    continue;
+                }
+                if (k === 'protecteur' && before <= 2 && after > 2) {
+                    checked++;
+                    continue;
+                }
+            }
+        }
+
+        const nextState = applyMove(state, move);
+
+        // Hard requirement: we must still be in full defense after attacking.
+        const ourDefenseAfter = getOurDefenseInfo(nextState, aiPlayerKey);
+        if (!ourDefenseAfter.isFullDefense) {
+            checked++;
+            continue;
+        }
+
+        const aiSafetyAfter = evaluateLeaderState(aiPlayerKey, nextState.placements, nextState.leadersPositions);
+        if (aiSafetyAfter.captured || aiSafetyAfter.surrounded) {
+            checked++;
+            continue;
+        }
+
+        // Hard requirement: do not allow immediate enemy win.
+        const remainingBudget = Math.max(1, totalBudgetMs - (performance.now() - startedAt));
+        if (hasImmediateWin(nextState, enemyKey, performance.now(), remainingBudget)) {
+            checked++;
+            continue;
+        }
+
+        // Score: base eval + tactical objective (exploit gap / create gap).
+        const base = evaluateState(nextState, aiPlayerKey, null, 0);
+        let tactical = 0;
+
+        // Recompute enemy defense stats after this move (cheap & robust).
+        const enemyDefenseAfter = getEnemyFullDefenseInfo(nextState, enemyKey);
+        const emptyAfter = enemyDefenseAfter?.stats?.emptyAdjacentCount ?? 0;
+        const emptyBefore = enemyDefenseNow?.stats?.emptyAdjacentCount ?? 0;
+        const adjAfter = enemyDefenseAfter?.stats?.adjacentUnitCount ?? 0;
+        const adjBefore = enemyDefenseNow?.stats?.adjacentUnitCount ?? 0;
+        const deltaEmpty = emptyAfter - emptyBefore;
+        const deltaAdj = adjBefore - adjAfter;
+
+        // If enemy has a gap, prioritize stepping into an adjacent empty square (pressure).
+        if (enemyGapNow) {
+            if (move?.type === 'MOVE_UNIT' && move?.to != null && enemyAdjIds.includes(move.to)) {
+                tactical += 900;
+            }
+            // General: moves that get closer to enemy leader are good, but don't overcommit.
+            if (move?.type === 'MOVE_UNIT' && move?.to != null && move?.unitId != null) {
+                const d0 = manhattanDist(move.unitId, enemyLeaderId);
+                const d1 = manhattanDist(move.to, enemyLeaderId);
+                tactical += (d0 - d1) * 220;
+                if (d0 <= 4) tactical += 120; // prefer using units already near enemy leader
+            }
+        } else {
+            // No gap: try to CREATE one (increase empty adjacents / reduce adjacent defenders).
+            tactical += (deltaEmpty * 700) + (deltaAdj * 600);
+
+            // Prefer using units that are already near enemy leader to probe.
+            if (move?.type === 'MOVE_UNIT' && move?.to != null && move?.unitId != null) {
+                const d0 = manhattanDist(move.unitId, enemyLeaderId);
+                const d1 = manhattanDist(move.to, enemyLeaderId);
+                tactical += (d0 - d1) * 140;
+                if (d0 <= 4) tactical += 220;
+                if (d1 <= 3) tactical += 140;
+            }
+            if (move?.type === 'USE_ABILITY') {
+                // Abilities are often the main way to pry open a turtle.
+                tactical += 220 + (deltaEmpty * 220) + (deltaAdj * 220);
+            }
+        }
+
+        const total = base + tactical;
+        if (total > bestScore) {
+            bestScore = total;
+            bestMove = move;
+        }
+
+        checked++;
+    }
+
+    return bestMove;
 };
 
 const moveTiebreakKey = (move) => {
@@ -1307,6 +1450,21 @@ export const getBestMove = (gameState, aiPlayerKey) => {
                 const end = performance.now();
                 console.log(`AI Turtle Response: mirror full defense in ${(end - start).toFixed(2)}ms | Move:`, bestMove);
                 return bestMove;
+            }
+        }
+    }
+
+    // G) Turtle-vs-turtle: keep OUR full defense, but still attack if there is an opening.
+    // - If enemy has a gap: exploit it without breaking our shell.
+    // - If no gap: probe using units already near enemy leader to create a gap.
+    if (enemyDefense.isFullDefense && !isTimeUp(forcedStart, FORCED_SCAN_TOTAL_BUDGET_MS)) {
+        const ourDefense = getOurDefenseInfo(gameState, aiPlayerKey);
+        if (ourDefense.isFullDefense) {
+            const poke = findBestSafeAttackWhileMaintainingFullDefense(gameState, aiPlayerKey, forcedStart, FORCED_SCAN_TOTAL_BUDGET_MS);
+            if (poke) {
+                const end = performance.now();
+                console.log(`AI Turtle Response: maintain full defense + attack in ${(end - start).toFixed(2)}ms | Move:`, poke);
+                return poke;
             }
         }
     }
