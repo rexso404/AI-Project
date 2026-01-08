@@ -1309,6 +1309,7 @@ const Board = ({ gameMode = 'player' }) => {
 
   const startAbilityForPiece = (piece) => {
     if (!piece || isGameOver || abilityContext) return;
+    if (canPickFor || recruitPickRemaining > 0) return; // Block during card picking phase
     if (hasUnitMoved(piece.playerKey, piece.deckIndex, piece.tokenId)) return;
     const deckCard = decks[piece.playerKey]?.[piece.deckIndex];
     const abilityType = deckCard?.abilityType ?? piece.abilityType;
@@ -3432,7 +3433,9 @@ const Board = ({ gameMode = 'player' }) => {
                     isCurrentPlayersPiece &&
                     !abilityContext &&
                     !hasUnitMoved(occupantPlayerKey, placedPiece?.deckIndex ?? null, placedPiece?.tokenId ?? null) &&
-                    !isAbilitySilencedByJailer(placedPiece)
+                    !isAbilitySilencedByJailer(placedPiece) &&
+                    !canPickFor &&
+                    recruitPickRemaining === 0
                   );
 
                   return (
