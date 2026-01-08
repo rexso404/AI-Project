@@ -1526,7 +1526,7 @@ const Board = ({ gameMode = 'player' }) => {
           highlightNodes: [forcedDest],
           data: {
             ...abilityContext.data,
-            hasProgress: true,
+            hasProgress: false,
             selectedTarget: {
               type: targetOcc.type,
               nodeId: node.id,
