@@ -70,10 +70,8 @@ const getRayFromNeighbor = (originId, firstId) => {
 // --- Ability Logic ---
 
 export const getManipulatorTargets = (originNodeId, playerKey, placements, leadersPositions) => {
-    // Use the same hex "raycasting" as ClawLauncher so Manipulator sees in
-    // all straight-line directions on this board.
-    // But per game rule customization: Manipulator cannot control horizontally,
-    // so we disallow horizontal rays (same y within FLOAT_TOLERANCE).
+    // Manipulator targets enemies in straight lines (not horizontal).
+    // Can target both adjacent and non-adjacent enemies in straight lines.
     const enemyKey = playerKey === 'p1' ? 'p2' : 'p1';
     const originNode = NODE_MAP.get(originNodeId);
     const adjacent = getAdjacentNodeIds(NODES, originNodeId);
@@ -98,18 +96,19 @@ export const getManipulatorTargets = (originNodeId, playerKey, placements, leade
             if (!occ) continue;
 
             // Line of sight blocks at the first occupied piece.
-            // Must be non-adjacent: idx === 0 means the occupied piece is adjacent.
-            if (idx > 0 && occ.playerKey === enemyKey) {
+            // Target enemy units/leaders in straight line (including adjacent)
+            if (occ.playerKey === enemyKey) {
                 if (isProtectedFromEnemyAbility(nodeId, occ.playerKey, placements, leadersPositions)) {
-                    break; // dilindungi protector, tidak bisa dipindah
+                    break; // protected by protector, cannot be moved
                 }
                 const key = `${occ.type}:${occ.playerKey}:${nodeId}`;
                 if (!seenTargets.has(key)) {
+                    const prevToTargetId = idx > 0 ? ray[idx - 1] : originNodeId;
                     targets.push({
                         ...occ,
                         nodeId,
                         rayFirstId: firstId,
-                        prevToTargetId: ray[idx - 1] ?? originNodeId,
+                        prevToTargetId,
                     });
                     seenTargets.add(key);
                 }

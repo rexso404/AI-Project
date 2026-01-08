@@ -111,6 +111,7 @@ const hasEnemyWithinDistanceOfLeader = (state, playerKey, maxDist = 2) => {
 // Detect when the enemy is "full defense" (turtling) based on user-described patterns.
 // 1) Enemy leader is ringed by ~5 units (Hermit+Cub counts as 2 units on board).
 // 2) Enemy leader sits on an edge and blocks the few approach squares (>=2 adjacent units with <=1 empty adjacent).
+// 3) Enemy leader has 3+ adjacent units and is in corner/edge position.
 const getEnemyFullDefenseInfo = (state, enemyKey) => {
     const stats = getLeaderAdjacencyStats(state, enemyKey);
     const condRing5 = stats.adjacentUnitCount >= 5;
@@ -119,10 +120,28 @@ const getEnemyFullDefenseInfo = (state, enemyKey) => {
         isLeaderOnEdge(stats.leaderId) &&
         stats.adjacentUnitCount >= 2 &&
         stats.emptyAdjacentCount <= 1;
+    
+    // New: Detect corner fortress (leader in corner with 3+ units)
+    const leaderNode = stats.leaderId != null ? NODE_MAP.get(stats.leaderId) : null;
+    const isCorner = leaderNode && (
+        (leaderNode.row === BOARD_BOUNDS.minRow || leaderNode.row === BOARD_BOUNDS.maxRow) &&
+        (leaderNode.col === BOARD_BOUNDS.minCol || leaderNode.col === BOARD_BOUNDS.maxCol)
+    );
+    const condCornerFortress = isCorner && stats.adjacentUnitCount >= 3;
+    
+    // New: Detect strong defense (4+ adjacent units anywhere)
+    const condStrongDefense = stats.adjacentUnitCount >= 4;
 
-    const isFullDefense = condRing5 || condEdgeTurtle;
-    const reason = condRing5 ? 'ring-5' : (condEdgeTurtle ? 'edge-2-block' : '');
-    return { isFullDefense, reason, stats };
+    const isFullDefense = condRing5 || condEdgeTurtle || condCornerFortress || condStrongDefense;
+    const reason = condRing5 ? 'ring-5' : 
+                   (condCornerFortress ? 'corner-fortress' :
+                   (condEdgeTurtle ? 'edge-2-block' : 
+                   (condStrongDefense ? 'strong-defense' : '')));
+    
+    // Calculate defense strength for graduated response
+    const defenseStrength = Math.min(5, stats.adjacentUnitCount + (isCorner ? 1 : 0) + (isLeaderOnEdge(stats.leaderId) ? 0.5 : 0));
+    
+    return { isFullDefense, reason, stats, defenseStrength };
 };
 
 const getOurDefenseInfo = (state, aiPlayerKey) => {
@@ -216,7 +235,17 @@ const scoreMoveHeuristic = (state, move, currentPlayer) => {
     // Urutan jenis aksi
     // Catatan: ini hanya untuk ordering (alpha-beta), bukan keputusan final.
     // Kita bias ke defensive-first agar AI tidak dominan menyerang.
-    if (move.type === 'USE_ABILITY') score += 3;
+    if (move.type === 'USE_ABILITY') {
+        score += 3;
+        // Bonus for siege-breaking abilities when facing full defense
+        if (enemyDefense.isFullDefense) {
+            const abilityKey = move.ability ?? move.cardKey ?? '';
+            const SIEGE_ABILITIES = ['illusionniste', 'lancegrappin', 'manipulatrice', 'cogneur'];
+            if (SIEGE_ABILITIES.includes(abilityKey)) {
+                score += 8; // Higher priority for siege breaker abilities
+            }
+        }
+    }
     else if (move.type === 'MOVE_UNIT') score += 2;
     else if (move.type === 'MOVE_LEADER') score += 1;
 
@@ -289,28 +318,51 @@ const scoreMoveHeuristic = (state, move, currentPlayer) => {
         }
     }
 
-    // Jika musuh full defense: jangan kirim banyak penyerang.
-    // - Assassin boleh maju sendirian.
-    // - Archer boleh ikut menyerang, tapi selain itu bias kembali menjaga leader.
+    // Jika musuh full defense: prioritize siege breakers and protect own leader.
+    // Siege breakers: assassin, illusionniste, lancegrappin, manipulatrice, cogneur
     if (enemyDefense.isFullDefense) {
         if (move.type === 'MOVE_UNIT' && move.to != null && move.unitId != null) {
             const k = move.cardKey;
             const before = manhattanDist(move.unitId, ownLeaderId);
             const after = manhattanDist(move.to, ownLeaderId);
+            const distToEnemyLeader = manhattanDist(move.to, enemyLeaderId);
+            const wasDist = manhattanDist(move.unitId, enemyLeaderId);
+            const advancing = distToEnemyLeader < wasDist;
 
-            // Bonus kuat kalau assassin mendekat ke leader musuh.
-            if (k === 'assassin') {
-                const d0 = manhattanDist(move.unitId, enemyLeaderId);
-                const d1 = manhattanDist(move.to, enemyLeaderId);
-                score += (d0 - d1) * 18;
+            // Define siege breakers - units that can disrupt full defense
+            const SIEGE_BREAKER_UNITS = ['assassin', 'illusionniste', 'lancegrappin', 'manipulatrice', 'cogneur'];
+            const isSiegeBreaker = SIEGE_BREAKER_UNITS.includes(k);
+            const isDefensive = (DEFENSIVE_UNITS.includes(k) || k === 'ourson');
+
+            if (isSiegeBreaker && advancing) {
+                // Strong bonus for siege breakers advancing toward enemy
+                const advanceBonus = (wasDist - distToEnemyLeader) * 15;
+                score += advanceBonus;
+
+                // Extra bonus based on unit type and distance
+                if (k === 'assassin') {
+                    // Assassin: bonus when getting close (can kill defenders)
+                    if (distToEnemyLeader <= 3) score += 25;
+                    if (distToEnemyLeader <= 2) score += 35;
+                } else if (k === 'illusionniste') {
+                    // Illusionist: bonus when in swap range (2-3) of enemy units
+                    if (distToEnemyLeader >= 2 && distToEnemyLeader <= 4) score += 20;
+                } else if (k === 'lancegrappin') {
+                    // Claw Launcher: bonus when in pull range
+                    if (distToEnemyLeader >= 2 && distToEnemyLeader <= 3) score += 25;
+                } else if (k === 'manipulatrice') {
+                    // Manipulator: bonus when adjacent to enemies
+                    if (distToEnemyLeader <= 2) score += 18;
+                } else if (k === 'cogneur') {
+                    // Pusher: bonus when can push defenders
+                    if (distToEnemyLeader <= 2) score += 15;
+                }
             }
 
-            // Penalize moving non-defensive units too far away from own leader (turtle response).
-            const isDefensive = (DEFENSIVE_UNITS.includes(k) || k === 'ourson');
-            const allowedAttacker = (k === 'assassin' || k === 'archere');
-            if (!isDefensive && !allowedAttacker) {
-                if (after > 3 && after > before) score -= 10;
-                if (after > 4 && after > before) score -= 12;
+            // Penalize moving non-siege, non-defensive units too far from own leader
+            if (!isDefensive && !isSiegeBreaker) {
+                if (after > 3 && after > before) score -= 12;
+                if (after > 4 && after > before) score -= 15;
             }
         }
     }
@@ -1403,15 +1455,26 @@ export const getBestMove = (gameState, aiPlayerKey) => {
             for (const move of moves) {
                 if (checked >= 18 || isTimeUp(forcedStart, FORCED_SCAN_TOTAL_BUDGET_MS)) break;
 
-                // Prefer defensive-unit moves and safe leader moves; avoid throwing attackers away.
+                // Prefer defensive-unit moves and safe leader moves; allow siege breaker advances.
                 if (move?.type === 'MOVE_UNIT') {
                     const k = move.cardKey;
                     const isDef = DEFENSIVE_UNITS.includes(k) || k === 'ourson';
-                    const allowedPoke = k === 'assassin' || k === 'archere';
-                    if (!isDef && !allowedPoke) {
-                        // Skip most non-defensive moves in this maintenance phase.
+                    // Siege breakers can also advance while maintaining defense
+                    const SIEGE_BREAKER_UNITS = ['assassin', 'illusionniste', 'lancegrappin', 'manipulatrice', 'cogneur', 'archere'];
+                    const isSiegeBreaker = SIEGE_BREAKER_UNITS.includes(k);
+                    if (!isDef && !isSiegeBreaker) {
+                        // Skip most non-defensive, non-siege breaker moves in this maintenance phase.
                         checked++;
                         continue;
+                    }
+                }
+
+                // Also allow siege breaker abilities
+                if (move?.type === 'USE_ABILITY') {
+                    const SIEGE_ABILITY_KEYS = ['illusionniste', 'lancegrappin', 'manipulatrice', 'cogneur'];
+                    const abilityKey = move.ability ?? move.cardKey ?? '';
+                    if (!SIEGE_ABILITY_KEYS.includes(abilityKey)) {
+                        // Still allow non-siege abilities but with lower priority (continue to check them)
                     }
                 }
 
@@ -1572,56 +1635,85 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
             score += Math.max(0, 5 - dist) * 15;
         });
 
-        // Turtle response (light):
-        // If enemy is in full defense, only commit:
-        // - Assassin solo (preferred), OR
-        // - Archer + 1 non-defensive attacker.
-        // Everyone else should stay near our leader.
+        // IMPROVED Turtle response:
+        // When enemy is in full defense, use specialized units to break through:
+        // - Assassin: Best at penetrating defense (can capture)
+        // - Illusionist: Can swap defenders out of position
+        // - Claw Launcher: Can pull defenders or leader
+        // - Manipulator: Can push defenders aside
+        // - Bruiser: Can push through defenders
+        // - Archer: Ranged pressure
+        // Everyone else should stay near our leader for counter-defense.
         if (enemyDefense.isFullDefense) {
             const aiLeaderId = state.leadersPositions[aiPlayerKey];
             const enemyLeaderId = state.leadersPositions[enemyKey];
             const aiUnits = (state.placements ?? []).filter((p) => p?.playerKey === aiPlayerKey);
 
-            const hasAssassin = aiUnits.some((u) => u.cardKey === 'assassin');
-            const hasArcher = aiUnits.some((u) => u.cardKey === 'archere');
+            // Determine defense strength for graduated response
+            const defenseStrength = enemyDefense.defenseStrength || 3;
+            
+            // Units that are good at breaking through defenses
+            const SIEGE_BREAKERS = ['assassin', 'illusionniste', 'lancegrappin', 'manipulatrice', 'cogneur'];
+            const RANGED_SUPPORT = ['archere'];
+            
             const allowedTokenKeys = new Set();
-
-            if (hasAssassin) {
-                // Allow assassin to be far.
-                aiUnits
-                    .filter((u) => u.cardKey === 'assassin')
-                    .forEach((u) => allowedTokenKeys.add(`${u.deckIndex ?? ''}:${u.tokenId ?? ''}:${u.nodeId ?? ''}`));
-
-                // Bonus for assassin proximity to enemy leader.
-                aiUnits
-                    .filter((u) => u.cardKey === 'assassin')
-                    .forEach((u) => {
-                        const d = manhattanDist(u.nodeId, enemyLeaderId);
-                        score += Math.max(0, 6 - d) * 180;
-                    });
-            } else if (hasArcher) {
-                // Allow archer + one best attacker.
-                const archer = aiUnits.find((u) => u.cardKey === 'archere');
-                if (archer) allowedTokenKeys.add(`${archer.deckIndex ?? ''}:${archer.tokenId ?? ''}:${archer.nodeId ?? ''}`);
-
-                const candidates = aiUnits.filter((u) => {
-                    const k = u.cardKey;
-                    const isDefensive = (DEFENSIVE_UNITS.includes(k) || k === 'ourson');
-                    return !isDefensive && k !== 'archere';
-                });
-                let bestAttacker = null;
-                let bestAttackerDist = Infinity;
-                for (const c of candidates) {
-                    const d = manhattanDist(c.nodeId, enemyLeaderId);
-                    if (d < bestAttackerDist) {
-                        bestAttackerDist = d;
-                        bestAttacker = c;
+            let siegeBreakerCount = 0;
+            const maxSiegeBreakers = defenseStrength >= 4 ? 3 : 2; // Allow more attackers vs stronger defense
+            
+            // Prioritize siege breakers by effectiveness
+            const siegePriority = ['assassin', 'illusionniste', 'lancegrappin', 'manipulatrice', 'cogneur'];
+            
+            for (const cardKey of siegePriority) {
+                if (siegeBreakerCount >= maxSiegeBreakers) break;
+                
+                const units = aiUnits.filter(u => u.cardKey === cardKey);
+                for (const u of units) {
+                    if (siegeBreakerCount >= maxSiegeBreakers) break;
+                    allowedTokenKeys.add(`${u.deckIndex ?? ''}:${u.tokenId ?? ''}:${u.nodeId ?? ''}`);
+                    siegeBreakerCount++;
+                    
+                    // Bonus for siege breakers approaching enemy leader
+                    const d = manhattanDist(u.nodeId, enemyLeaderId);
+                    const proximityBonus = cardKey === 'assassin' ? 200 : 120;
+                    score += Math.max(0, 6 - d) * proximityBonus;
+                    
+                    // Extra bonus for Illusionist/Claw Launcher/Manipulator if they can actually use ability
+                    if (cardKey === 'illusionniste') {
+                        const targets = getIllusionistTargets(u.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+                        const canSwapDefender = targets.some(t => t.playerKey === enemyKey && 
+                            getAdjacentNodeIds(NODES, enemyLeaderId).includes(t.nodeId));
+                        if (canSwapDefender) score += 500; // Can disrupt defense!
+                    }
+                    if (cardKey === 'lancegrappin') {
+                        const targets = getClawLauncherTargets(u.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+                        const canPullDefender = targets.some(t => t.playerKey === enemyKey && 
+                            getAdjacentNodeIds(NODES, enemyLeaderId).includes(t.nodeId));
+                        const canPullLeader = targets.some(t => t.nodeId === enemyLeaderId);
+                        if (canPullDefender) score += 400;
+                        if (canPullLeader) score += 600;
+                    }
+                    if (cardKey === 'manipulatrice') {
+                        const targets = getManipulatorTargets(u.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+                        const canMoveDefender = targets.some(t => t.playerKey === enemyKey && 
+                            getAdjacentNodeIds(NODES, enemyLeaderId).includes(t.nodeId));
+                        const canMoveLeader = targets.some(t => t.nodeId === enemyLeaderId);
+                        if (canMoveDefender) score += 400;
+                        if (canMoveLeader) score += 500;
                     }
                 }
-                if (bestAttacker) {
-                    allowedTokenKeys.add(`${bestAttacker.deckIndex ?? ''}:${bestAttacker.tokenId ?? ''}:${bestAttacker.nodeId ?? ''}`);
-                }
             }
+            
+            // Always allow archer for ranged support
+            aiUnits.filter(u => u.cardKey === 'archere').forEach(u => {
+                allowedTokenKeys.add(`${u.deckIndex ?? ''}:${u.tokenId ?? ''}:${u.nodeId ?? ''}`);
+                // Bonus for archer in firing position
+                const uNode = NODE_MAP.get(u.nodeId);
+                if (uNode && enemyLeaderNode) {
+                    if (uNode.col === enemyLeaderNode.col || uNode.row === enemyLeaderNode.row) {
+                        score += 300; // In firing line
+                    }
+                }
+            });
 
             // Penalize all other non-defensive units that wander too far from our leader.
             for (const u of aiUnits) {
