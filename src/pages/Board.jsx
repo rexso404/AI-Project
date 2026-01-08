@@ -1513,17 +1513,20 @@ const Board = ({ gameMode = 'player' }) => {
           return;
         }
 
-        const targetMeta = abilityContext.data?.targets?.find((t) => t?.nodeId === node.id);
-        const forcedDest = targetMeta?.prevToTargetId ?? null;
-        if (forcedDest == null || !isNodeEmpty(forcedDest, placements, leadersPositions)) {
-          setStatusMessage('Tidak ada petak kosong untuk mendorong target ke arah Manipulator.');
+        // Get all adjacent empty nodes to the target (any direction)
+        const adjacentEmptyNodes = getAdjacentNodeIds(nodes, node.id).filter(id =>
+          isNodeEmpty(id, placements, leadersPositions)
+        );
+
+        if (!adjacentEmptyNodes.length) {
+          setStatusMessage('Tidak ada petak kosong di sekitar target untuk memindahkannya.');
           return;
         }
 
         setAbilityContext({
           ...abilityContext,
           phase: 'manipulator-select-destination',
-          highlightNodes: [forcedDest],
+          highlightNodes: adjacentEmptyNodes,
           data: {
             ...abilityContext.data,
             hasProgress: false,
@@ -1533,11 +1536,10 @@ const Board = ({ gameMode = 'player' }) => {
               playerKey: targetOcc.playerKey,
               deckIndex: targetOcc.type === 'unit' ? targetOcc.deckIndex : null,
               tokenId: targetOcc.type === 'unit' ? (targetOcc.tokenId ?? null) : null,
-              prevToTargetId: forcedDest,
             },
           },
         });
-        setStatusMessage('Pilih petak yang disorot untuk mendorong target 1 langkah ke arah Manipulator.');
+        setStatusMessage('Pilih petak yang disorot untuk memindahkan target 1 langkah.');
         return;
       }
 
@@ -1554,12 +1556,6 @@ const Board = ({ gameMode = 'player' }) => {
         }
         if (!isNodeEmpty(node.id, placements, leadersPositions)) {
           setStatusMessage('Petak ini sudah terisi.');
-          return;
-        }
-
-        // Safety: enforce forced destination.
-        if (selectedTarget.prevToTargetId != null && node.id !== selectedTarget.prevToTargetId) {
-          setStatusMessage('Manipulator hanya dapat mendorong target ke petak yang disorot.');
           return;
         }
 
