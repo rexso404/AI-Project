@@ -1472,7 +1472,14 @@ const Board = ({ gameMode = 'player' }) => {
         setPendingForcedResume(null);
         if (!gameEnded && resumeTurnLabel) {
           setTimeout(() => {
-            // Continue the mover's phase resolution (turn switch / recruit phase).
+            // In AI mode, this Nemesis move is an off-turn interruption that should NOT
+            // consume/end the AI's remaining actions. Re-enable the AI orchestration loop.
+            if (gameMode === 'ai' && resumeTurnLabel === 'Player 2') {
+              setAiThinking(false);
+              return;
+            }
+
+            // Fallback: resume normal post-move flow for human turns.
             handlePostMove(resumeTurnLabel);
           }, 450);
         }
