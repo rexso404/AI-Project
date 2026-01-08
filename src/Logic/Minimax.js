@@ -1626,13 +1626,37 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
         });
 
         // Reward own units pressuring enemy leader (cheap distance-only)
-        // Diturunkan agar AI tidak terlalu agresif.
+        // INCREASED AGGRESSION: Higher weights and specific bonus for "Check"
         state.placements.forEach(p => {
             if (p.playerKey !== aiPlayerKey) return;
             const unitNode = NODE_MAP.get(p.nodeId);
             if (!unitNode || !enemyLeaderNode) return;
             const dist = Math.abs(unitNode.col - enemyLeaderNode.col) + Math.abs(unitNode.row - enemyLeaderNode.row);
-            score += Math.max(0, 5 - dist) * 15;
+            
+            // Base pressure score
+            score += Math.max(0, 5 - dist) * 45; // Significantly increased from 15
+            
+            // "Check" Bonus (Adjacent to enemy leader)
+            if (dist === 1) score += 400; 
+            
+            // "Looming Threat" Bonus (Distance 2)
+            if (dist === 2) score += 150;
+
+            // Extra bonus for high-offense units
+            if (['assassin', 'cogneur', 'lancegrappin', 'illusionniste'].includes(p.cardKey)) {
+                 score += Math.max(0, 5 - dist) * 30;
+            }
+        });
+
+        // Center Control Bonus (New)
+        // Good for mobility and flexibility
+        state.placements.forEach(p => {
+             if (p.playerKey !== aiPlayerKey) return;
+             const n = NODE_MAP.get(p.nodeId);
+             if (n && n.row >= 1 && n.row <= 3 && n.col >= 1 && n.col <= 3) {
+                 if (n.row === 2 && n.col === 2) score += 45; // Dead center
+                 else score += 20; // Inner ring
+             }
         });
 
         // IMPROVED Turtle response:
@@ -1915,6 +1939,82 @@ const evaluateState = (state, aiPlayerKey, outcome, plyFromRoot = 0) => {
                 if (unitNode && aiLeaderNode) {
                     const dist = Math.abs(unitNode.col - aiLeaderNode.col) + Math.abs(unitNode.row - aiLeaderNode.row);
                     if (dist === 1) score -= 200; // Any adjacent enemy is a threat
+                }
+            }
+        }
+    });
+
+    // A2. Analyze AI Offensive Potential (New Section: Aggressive Posture)
+    const enemyLeaderNodeId_Offense = state.leadersPositions[enemyKey];
+    const enemyLeaderNode_Offense = NODES.find(n => n.id === enemyLeaderNodeId_Offense);
+    const enemyLeaderAdjacents_Offense = getAdjacentNodeIds(NODES, enemyLeaderNodeId_Offense);
+    
+    state.placements.forEach(p => {
+        if (p.playerKey === aiPlayerKey) {
+            const unitNode = NODES.find(n => n.id === p.nodeId);
+            const distToEnemy = (unitNode && enemyLeaderNode_Offense) 
+                ? Math.abs(unitNode.col - enemyLeaderNode_Offense.col) + Math.abs(unitNode.row - enemyLeaderNode_Offense.row)
+                : 100;
+
+            // Basic Proximity Pressure (Mirrors Threat logic but positive)
+            if (distToEnemy === 1) score += 350; 
+            else if (distToEnemy === 2) score += 150; 
+
+            // 1. LANCE-GRAPPIN - Offensive Pull
+            if (p.cardKey === 'lancegrappin') {
+                const targets = getClawLauncherTargets(p.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+                const threatensLeader = targets.some(t => t.nodeId === enemyLeaderNodeId_Offense);
+                if (threatensLeader) score += 2000; // Excellent threat
+                
+                const canPullDefender = targets.some(t => 
+                    t.playerKey === enemyKey && enemyLeaderAdjacents_Offense.includes(t.nodeId)
+                );
+                if (canPullDefender) score += 700;
+            }
+            // 2. MANIPULATRICE - Offensive Push
+            else if (p.cardKey === 'manipulatrice') {
+                const targets = getManipulatorTargets(p.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+                const threatensLeader = targets.some(t => t.nodeId === enemyLeaderNodeId_Offense);
+                if (threatensLeader) score += 2000;
+                
+                const canMoveDefender = targets.some(t => 
+                    t.playerKey === enemyKey && enemyLeaderAdjacents_Offense.includes(t.nodeId)
+                );
+                if (canMoveDefender) score += 700;
+            }
+            // 3. ASSASSIN - Lethal Range
+            else if (p.cardKey === 'assassin') {
+                if (distToEnemy === 1) score += 3000; // Critical Threat!
+                else if (distToEnemy <= 2) score += 1200;
+                else if (distToEnemy <= 3) score += 400; // Hunting
+            }
+            // 4. ILLUSIONNISTE - Swap Attack
+            else if (p.cardKey === 'illusionniste') {
+                const targets = getIllusionistTargets(p.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+                const canSwapLeader = targets.some(t => t.nodeId === enemyLeaderNodeId_Offense);
+                if (canSwapLeader) score += 2200; 
+            }
+            // 5. COGNEUR - Bullying
+            else if (p.cardKey === 'cogneur') {
+                const pushTargets = getBruiserTargets(p.nodeId, aiPlayerKey, state.placements, state.leadersPositions);
+                const canPushLeader = pushTargets.some(t => t.nodeId === enemyLeaderNodeId_Offense);
+                if (canPushLeader) score += 1800;
+                
+                const canPushDefender = pushTargets.some(t => 
+                    t.playerKey === enemyKey && enemyLeaderAdjacents_Offense.includes(t.nodeId)
+                );
+                if (canPushDefender) score += 900;
+            }
+             // 6. RODEUSE
+            else if (p.cardKey === 'rodeuse') {
+                 score += 100;
+            }
+            // 7. ARCHERE
+            else if (p.cardKey === 'archere') {
+                if (unitNode && enemyLeaderNode_Offense) {
+                    const sameCol = unitNode.col === enemyLeaderNode_Offense.col;
+                    const sameRow = unitNode.row === enemyLeaderNode_Offense.row;
+                    if (sameCol || sameRow) score += 500;
                 }
             }
         }
